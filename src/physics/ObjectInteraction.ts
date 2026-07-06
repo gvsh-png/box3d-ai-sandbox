@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import RAPIER from '@dimforge/rapier3d-compat';
+import type RAPIER from '@dimforge/rapier3d-compat';
 
 type Pickable = {
   mesh: THREE.Mesh;
@@ -10,44 +10,39 @@ type Pickable = {
 type GrabState = {
   entry: Pickable;
   holdDistance: number;
-  target: THREE.Vector3;
   minCenterY: number;
 };
 
-const GROUND_SURFACE_Y = 0.02;
+const GROUND_Y = 0.02;
 
-// Camera feel
-const LOOK_SENS = 0.002;
-const MOVE_ACCEL = 55;
-const MOVE_MAX_SPEED = 16;
-const MOVE_DAMPING = 10;
-const SCROLL_IMPULSE = 1.8;
+// ── Tuning ──────────────────────────────────────────────────────────
+const LOOK_SENS = 0.0022;
+const MOVE_SPEED = 14;
+const MOVE_ACCEL = 6; // how fast we reach target speed (higher = snappier)
+const SCROLL_SPEED = 2.5;
 
-// Grab feel (spring physics — object stays dynamic)
-const GRAB_SPRING = 140;
-const GRAB_DAMPING = 22;
-const GRAB_DIST_MIN = 2.5;
-const GRAB_DIST_MAX = 22;
-const GRAB_SPIN_DAMP = 0.88;
+const GRAB_FOLLOW = 18; // velocity pull toward target
+const GRAB_MAX_SPEED = 22;
+const GRAB_DIST_MIN = 2;
+const GRAB_DIST_MAX = 24;
+const GRAB_SPIN_DAMP = 0.82;
 
 /**
- * Smooth fly camera + spring-based object grab (GMod-style).
- *
- * RMB / MMB — look around
- * WASD + Space/Shift — smooth fly
- * Scroll — dolly forward/back (adjust grab distance while holding)
- * LMB on object — spring grab (release to throw)
+ * FPS sandbox controls:
+ *   Hold RMB → look + WASD flies where you aim (W = into the screen)
+ *   LMB on object → grab & drag (follows crosshair / view center)
+ *   Scroll → move forward (RMB held) or adjust grab distance (LMB held)
  */
 export class ObjectInteraction {
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
+
   private grab: GrabState | null = null;
   private hovered: Pickable | null = null;
   private lmbDown = false;
   private rmbDown = false;
-  private mmbDown = false;
-  private capturePointerId: number | null = null;
   private pointerPrev = { x: 0, y: 0 };
+  private captureId: number | null = null;
 
   private camPos = new THREE.Vector3(8, 6, 12);
   private yaw = -0.6;
@@ -66,8 +61,11 @@ export class ObjectInteraction {
     private camera: THREE.PerspectiveCamera,
     private getPickables: () => Pickable[],
   ) {
+    canvas.tabIndex = 0;
+    canvas.style.outline = 'none';
     canvas.style.touchAction = 'none';
-    canvas.addEventListener('contextmenu', this.preventContext);
+
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('pointerdown', this.onPointerDown);
     canvas.addEventListener('pointermove', this.onPointerMove);
     canvas.addEventListener('pointerup', this.onPointerUp);
@@ -76,21 +74,20 @@ export class ObjectInteraction {
     window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
+
     this.applyCamera();
   }
 
-  /** Called each physics frame from SandboxWorld. */
   update(dt: number): void {
     if (this.disposed) return;
-    this.updateCameraMovement(dt);
-    this.updateGrabSpring(dt);
+    if (this.isEngaged()) this.updateMovement(dt);
+    if (this.grab && this.lmbDown) this.updateGrab(dt);
   }
 
   dispose(): void {
     this.disposed = true;
     this.releaseGrab();
     this.setHover(null);
-    this.canvas.removeEventListener('contextmenu', this.preventContext);
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
     this.canvas.removeEventListener('pointermove', this.onPointerMove);
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
@@ -101,7 +98,17 @@ export class ObjectInteraction {
     window.removeEventListener('keyup', this.onKeyUp);
   }
 
-  private preventContext = (e: Event) => e.preventDefault();
+  /** RMB held = mouselook + WASD active */
+  private isEngaged(): boolean {
+    return this.rmbDown;
+  }
+
+  private isTyping(): boolean {
+    const el = document.activeElement;
+    if (!(el instanceof HTMLElement)) return false;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+  }
 
   private updateBasis(): void {
     this.forward.set(
@@ -118,14 +125,8 @@ export class ObjectInteraction {
     this.camera.lookAt(this.camPos.clone().add(this.forward));
   }
 
-  private isTypingTarget(target: EventTarget | null): boolean {
-    if (!(target instanceof HTMLElement)) return false;
-    const tag = target.tagName;
-    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
-  }
-
   private onKeyDown = (e: KeyboardEvent): void => {
-    if (this.disposed || this.isTypingTarget(e.target)) return;
+    if (this.disposed || this.isTyping()) return;
     this.keys.add(e.code);
   };
 
@@ -133,72 +134,74 @@ export class ObjectInteraction {
     this.keys.delete(e.code);
   };
 
-  private updateCameraMovement(dt: number): void {
-    if (this.isTypingTarget(document.activeElement)) return;
-
+  /** WASD relative to where camera looks — only while RMB held */
+  private updateMovement(dt: number): void {
+    if (this.isTyping()) return;
     this.updateBasis();
 
     const wish = new THREE.Vector3();
-    const forwardFlat = new THREE.Vector3(this.forward.x, 0, this.forward.z);
-    if (forwardFlat.lengthSq() < 1e-6) forwardFlat.set(0, 0, -1);
-    forwardFlat.normalize();
-    const rightFlat = new THREE.Vector3().crossVectors(forwardFlat, this.up).normalize();
-
-    if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) wish.add(forwardFlat);
-    if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) wish.sub(forwardFlat);
-    if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) wish.add(rightFlat);
-    if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) wish.sub(rightFlat);
+    if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) wish.add(this.forward);
+    if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) wish.sub(this.forward);
+    if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) wish.add(this.right);
+    if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) wish.sub(this.right);
     if (this.keys.has('Space')) wish.add(this.up);
     if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) wish.sub(this.up);
 
+    const targetVel = new THREE.Vector3();
     if (wish.lengthSq() > 0) {
-      wish.normalize().multiplyScalar(MOVE_ACCEL * dt);
-      this.moveVel.add(wish);
+      targetVel.copy(wish.normalize().multiplyScalar(MOVE_SPEED));
     }
 
-    const speed = this.moveVel.length();
-    if (speed > MOVE_MAX_SPEED) {
-      this.moveVel.multiplyScalar(MOVE_MAX_SPEED / speed);
-    }
+    // Smooth toward target velocity
+    const t = 1 - Math.exp(-MOVE_ACCEL * dt);
+    this.moveVel.lerp(targetVel, t);
 
-    this.moveVel.multiplyScalar(Math.exp(-MOVE_DAMPING * dt));
-
-    if (this.moveVel.lengthSq() > 1e-8) {
+    if (this.moveVel.lengthSq() > 1e-6) {
       this.camPos.addScaledVector(this.moveVel, dt);
       this.applyCamera();
     }
   }
 
-  private updateGrabTarget(): void {
-    if (!this.grab) return;
+  /** Aim point at center of screen (crosshair) */
+  private getAimPoint(distance: number, out: THREE.Vector3): THREE.Vector3 {
     this.updateBasis();
-    this.grab.target
-      .copy(this.camPos)
-      .addScaledVector(this.forward, this.grab.holdDistance);
-    this.grab.target.y = Math.max(this.grab.minCenterY, this.grab.target.y);
+    return out.copy(this.camPos).addScaledVector(this.forward, distance);
   }
 
-  private updateGrabSpring(dt: number): void {
+  private updateGrab(dt: number): void {
     if (!this.grab) return;
 
-    this.updateGrabTarget();
+    const target = this.getAimPoint(this.grab.holdDistance, new THREE.Vector3());
+    target.y = Math.max(this.grab.minCenterY, target.y);
 
     const body = this.grab.entry.body;
+    body.wakeUp();
+
     const pos = body.translation();
     const vel = body.linvel();
 
-    const dx = this.grab.target.x - pos.x;
-    const dy = this.grab.target.y - pos.y;
-    const dz = this.grab.target.z - pos.z;
+    const dx = target.x - pos.x;
+    const dy = target.y - pos.y;
+    const dz = target.z - pos.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-    body.applyImpulse(
-      {
-        x: (dx * GRAB_SPRING - vel.x * GRAB_DAMPING) * dt,
-        y: (dy * GRAB_SPRING - vel.y * GRAB_DAMPING) * dt,
-        z: (dz * GRAB_SPRING - vel.z * GRAB_DAMPING) * dt,
-      },
-      true,
-    );
+    if (dist > 0.01) {
+      const speed = Math.min(dist * GRAB_FOLLOW, GRAB_MAX_SPEED);
+      const inv = 1 / dist;
+      const desiredVx = dx * inv * speed;
+      const desiredVy = dy * inv * speed;
+      const desiredVz = dz * inv * speed;
+
+      const blend = 1 - Math.exp(-12 * dt);
+      body.setLinvel(
+        {
+          x: vel.x + (desiredVx - vel.x) * blend,
+          y: vel.y + (desiredVy - vel.y) * blend,
+          z: vel.z + (desiredVz - vel.z) * blend,
+        },
+        true,
+      );
+    }
 
     const av = body.angvel();
     body.setAngvel(
@@ -209,88 +212,61 @@ export class ObjectInteraction {
 
   private getMinCenterY(mesh: THREE.Mesh): number {
     const box = new THREE.Box3().setFromObject(mesh);
-    const halfHeight = Math.max(0.15, (box.max.y - box.min.y) * 0.5);
-    return GROUND_SURFACE_Y + halfHeight;
+    return GROUND_Y + Math.max(0.15, (box.max.y - box.min.y) * 0.5);
   }
 
-  private updatePointer(e: PointerEvent): void {
-    const rect = this.canvas.getBoundingClientRect();
-    this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  private setPointer(e: PointerEvent): void {
+    const r = this.canvas.getBoundingClientRect();
+    this.pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+    this.pointer.y = -((e.clientY - r.top) / r.height) * 2 + 1;
   }
 
-  private pick(): Pickable | null {
-    this.raycaster.setFromCamera(this.pointer, this.camera);
+  private pickAt(ndc: THREE.Vector2): Pickable | null {
+    this.raycaster.setFromCamera(ndc, this.camera);
     const meshes = this.getPickables().map((p) => p.mesh);
+    if (!meshes.length) return null;
     const hits = this.raycaster.intersectObjects(meshes, false);
     if (!hits.length) return null;
     const mesh = hits[0].object as THREE.Mesh;
     return this.getPickables().find((p) => p.mesh === mesh) ?? null;
   }
 
-  private capturePointer(e: PointerEvent): void {
-    if (this.capturePointerId === null) {
-      this.canvas.setPointerCapture(e.pointerId);
-      this.capturePointerId = e.pointerId;
-    }
-  }
-
-  private releaseCapture(e: PointerEvent): void {
-    if (this.capturePointerId === e.pointerId) {
-      try {
-        this.canvas.releasePointerCapture(e.pointerId);
-      } catch {
-        /* ok */
-      }
-      this.capturePointerId = null;
-    }
-  }
-
   private onPointerDown = (e: PointerEvent): void => {
     if (this.disposed) return;
+    this.canvas.focus({ preventScroll: true });
     this.pointerPrev = { x: e.clientX, y: e.clientY };
 
     if (e.button === 2) {
       this.rmbDown = true;
-      this.capturePointer(e);
-      e.preventDefault();
-      return;
-    }
-
-    if (e.button === 1) {
-      this.mmbDown = true;
-      this.capturePointer(e);
-      e.preventDefault();
+      this.capture(e);
       return;
     }
 
     if (e.button !== 0) return;
 
     this.lmbDown = true;
-    this.updatePointer(e);
-    const hit = this.pick();
+    this.setPointer(e);
 
-    if (!hit || !hit.body.isDynamic()) {
-      this.capturePointer(e);
-      return;
+    const hit = this.pickAt(this.pointer);
+    if (hit?.body.isDynamic()) {
+      this.capture(e);
+      this.canvas.style.cursor = 'grabbing';
+
+      const bp = hit.body.translation();
+      const dist = this.camPos.distanceTo(new THREE.Vector3(bp.x, bp.y, bp.z));
+
+      this.grab = {
+        entry: hit,
+        holdDistance: THREE.MathUtils.clamp(dist, GRAB_DIST_MIN, GRAB_DIST_MAX),
+        minCenterY: this.getMinCenterY(hit.mesh),
+      };
+
+      hit.body.wakeUp();
+      hit.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      this.setHover(hit);
+    } else {
+      this.capture(e);
     }
-
-    this.capturePointer(e);
-    this.canvas.style.cursor = 'grabbing';
-
-    const bodyPos = hit.body.translation();
-    const dist = this.camPos.distanceTo(new THREE.Vector3(bodyPos.x, bodyPos.y, bodyPos.z));
-    const holdDistance = THREE.MathUtils.clamp(dist, GRAB_DIST_MIN, GRAB_DIST_MAX);
-
-    this.grab = {
-      entry: hit,
-      holdDistance,
-      target: new THREE.Vector3(bodyPos.x, bodyPos.y, bodyPos.z),
-      minCenterY: this.getMinCenterY(hit.mesh),
-    };
-
-    hit.body.wakeUp();
-    this.setHover(hit);
   };
 
   private onPointerMove = (e: PointerEvent): void => {
@@ -300,15 +276,15 @@ export class ObjectInteraction {
     const dy = e.clientY - this.pointerPrev.y;
     this.pointerPrev = { x: e.clientX, y: e.clientY };
 
-    if (this.rmbDown || this.mmbDown) {
+    if (this.rmbDown) {
       this.yaw -= dx * LOOK_SENS;
-      this.pitch = THREE.MathUtils.clamp(this.pitch - dy * LOOK_SENS, -1.52, 1.52);
+      this.pitch = THREE.MathUtils.clamp(this.pitch - dy * LOOK_SENS, -1.55, 1.55);
       this.applyCamera();
     }
 
-    if (!this.lmbDown && !this.rmbDown && !this.mmbDown) {
-      this.updatePointer(e);
-      const hit = this.pick();
+    if (!this.lmbDown && !this.rmbDown) {
+      this.setPointer(e);
+      const hit = this.pickAt(this.pointer);
       if (hit?.body.isDynamic()) {
         this.setHover(hit);
         this.canvas.style.cursor = 'grab';
@@ -320,42 +296,61 @@ export class ObjectInteraction {
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (e.button === 2) this.rmbDown = false;
-    else if (e.button === 1) this.mmbDown = false;
-    else if (e.button === 0) {
+    if (e.button === 2) {
+      this.rmbDown = false;
+      this.moveVel.set(0, 0, 0);
+    } else if (e.button === 0) {
       this.lmbDown = false;
       this.releaseGrab();
     }
 
-    if (!this.lmbDown && !this.rmbDown && !this.mmbDown) {
+    if (!this.lmbDown && !this.rmbDown) {
       this.releaseCapture(e);
       this.canvas.style.cursor = this.hovered ? 'grab' : 'default';
     }
   };
 
+  private capture(e: PointerEvent): void {
+    if (this.captureId === null) {
+      this.canvas.setPointerCapture(e.pointerId);
+      this.captureId = e.pointerId;
+    }
+  }
+
+  private releaseCapture(e: PointerEvent): void {
+    if (this.captureId === e.pointerId) {
+      try {
+        this.canvas.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ok */
+      }
+      this.captureId = null;
+    }
+  }
+
   private releaseGrab(): void {
     if (!this.grab) return;
     this.grab.entry.body.wakeUp();
     this.grab = null;
-    this.canvas.style.cursor = this.hovered ? 'grab' : 'default';
+    if (!this.lmbDown) this.canvas.style.cursor = this.hovered ? 'grab' : 'default';
   }
 
   private setHover(entry: Pickable | null): void {
     if (this.hovered && this.hovered !== entry) {
-      this.setMeshHighlight(this.hovered.mesh, false);
+      this.setHighlight(this.hovered.mesh, false);
     }
     this.hovered = entry;
     if (entry && entry !== this.grab?.entry) {
-      this.setMeshHighlight(entry.mesh, true);
+      this.setHighlight(entry.mesh, true);
     }
   }
 
-  private setMeshHighlight(mesh: THREE.Mesh, on: boolean): void {
-    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (const m of materials) {
+  private setHighlight(mesh: THREE.Mesh, on: boolean): void {
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const m of mats) {
       if (m instanceof THREE.MeshStandardMaterial) {
-        m.emissive.setHex(on ? 0x223355 : 0x000000);
-        m.emissiveIntensity = on ? 0.25 : 0;
+        m.emissive.setHex(on ? 0x224466 : 0x000000);
+        m.emissiveIntensity = on ? 0.3 : 0;
       }
     }
   }
@@ -364,19 +359,18 @@ export class ObjectInteraction {
     e.preventDefault();
     this.updateBasis();
 
-    const scrollDelta = -e.deltaY * 0.003 * SCROLL_IMPULSE;
-
     if (this.grab && this.lmbDown) {
       this.grab.holdDistance = THREE.MathUtils.clamp(
-        this.grab.holdDistance + e.deltaY * 0.015,
+        this.grab.holdDistance - e.deltaY * 0.012,
         GRAB_DIST_MIN,
         GRAB_DIST_MAX,
       );
       return;
     }
 
-    const impulse = this.forward.clone().multiplyScalar(scrollDelta * 60);
-    this.moveVel.add(impulse);
-    this.applyCamera();
+    if (this.rmbDown) {
+      this.camPos.addScaledVector(this.forward, -e.deltaY * 0.01 * SCROLL_SPEED);
+      this.applyCamera();
+    }
   };
 }

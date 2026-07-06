@@ -30,7 +30,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       role: 'assistant',
-      text: 'Smooth controls: WASD fly · RMB look · LMB grab objects · scroll to move / adjust hold distance',
+      text: 'Hold RMB to look & WASD fly (W = forward into view). LMB grab objects. Scroll adjusts distance while holding.',
     },
   ]);
 
@@ -116,7 +116,7 @@ export default function App() {
           {!ready && <span className="badge">Loading physics…</span>}
           {ready && <span className="badge ok">Sim running</span>}
           {apiKey ? <span className="badge ok">Script mode</span> : <span className="badge">Local mode</span>}
-          {ready && <span className="badge hint">WASD · RMB look · LMB grab</span>}
+          {ready && <span className="badge hint">Hold RMB: look + WASD · LMB: grab</span>}
         </div>
       </header>
 
