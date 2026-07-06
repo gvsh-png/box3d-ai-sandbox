@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ObjectInteraction } from './ObjectInteraction';
 import { colliderFromGeometry } from './colliderUtils';
+import { resolveAxis } from './scriptArgs';
 import type { PhysicsOpts } from './WorldRuntime';
 import type {
   AddJointCommand,
@@ -561,7 +562,7 @@ export class SandboxWorld {
     if (!a) throw new Error(`Joint failed: body "${cmd.bodyA}" not found — use string ids from world.create({ id: "..." })`);
     if (!b) throw new Error(`Joint failed: body "${cmd.bodyB}" not found — use string ids from world.create({ id: "..." })`);
 
-    const axis = cmd.axis ?? { x: 1, y: 0, z: 0 };
+    const axis = resolveAxis(cmd.axis);
     const jointData =
       cmd.type === 'fixed'
         ? RAPIER.JointData.fixed({ x: 0, y: 0, z: 0 }, { w: 1, x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { w: 1, x: 0, y: 0, z: 0 })
@@ -577,7 +578,7 @@ export class SandboxWorld {
     }
     this.motors.set(cmd.bodyId, {
       torque: cmd.torque,
-      axis: cmd.axis ?? { x: 1, y: 0, z: 0 },
+      axis: resolveAxis(cmd.axis),
     });
   }
 
