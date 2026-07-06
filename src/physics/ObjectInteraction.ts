@@ -22,6 +22,7 @@ const GROUND_SURFACE_Y = 0.02;
 const LOOK_SENS = 0.003;
 const PAN_SENS = 0.012;
 const SCROLL_SENS = 0.04;
+const MOVE_SPEED = 10;
 
 /**
  * Fly camera + object dragging.
@@ -43,6 +44,9 @@ export class ObjectInteraction {
   private forward = new THREE.Vector3();
   private right = new THREE.Vector3();
   private up = new THREE.Vector3(0, 1, 0);
+  private keys = new Set<string>();
+  private moveLoopId = 0;
+  private lastMoveTime = performance.now();
 
   private disposed = false;
 
@@ -59,6 +63,10 @@ export class ObjectInteraction {
     canvas.addEventListener('pointercancel', this.onPointerUp);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
     window.addEventListener('pointerup', this.onPointerUp);
+    window.addEventListener('keydown', this.onKeyDown);
+    window.addEventListener('keyup', this.onKeyUp);
+    this.lastMoveTime = performance.now();
+    this.moveLoopId = requestAnimationFrame(this.tickMovement);
     this.applyCamera();
   }
 
@@ -73,6 +81,9 @@ export class ObjectInteraction {
     this.canvas.removeEventListener('pointercancel', this.onPointerUp);
     this.canvas.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('pointerup', this.onPointerUp);
+    window.removeEventListener('keydown', this.onKeyDown);
+    window.removeEventListener('keyup', this.onKeyUp);
+    cancelAnimationFrame(this.moveLoopId);
   }
 
   private preventContext = (e: Event) => e.preventDefault();
@@ -92,9 +103,8 @@ export class ObjectInteraction {
     this.camera.lookAt(this.camPos.clone().add(this.forward));
   }
 
-  private moveAlongView(amount: number): void {
-    this.updateBasis();
-    const delta = this.forward.clone().multiplyScalar(amount);
+  private applyMoveDelta(delta: THREE.Vector3): void {
+    if (delta.lengthSq() < 1e-8) return;
     this.camPos.add(delta);
 
     if (this.drag) {
@@ -104,6 +114,58 @@ export class ObjectInteraction {
 
     this.applyCamera();
   }
+
+  private moveAlongView(amount: number): void {
+    this.updateBasis();
+    this.applyMoveDelta(this.forward.clone().multiplyScalar(amount));
+  }
+
+  private isTypingTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    const tag = target.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+  }
+
+  private onKeyDown = (e: KeyboardEvent): void => {
+    if (this.disposed || this.isTypingTarget(e.target)) return;
+    this.keys.add(e.code);
+  };
+
+  private onKeyUp = (e: KeyboardEvent): void => {
+    this.keys.delete(e.code);
+  };
+
+  private tickMovement = (now: number): void => {
+    if (!this.disposed) {
+      const dt = Math.min(0.05, (now - this.lastMoveTime) / 1000);
+      this.lastMoveTime = now;
+
+      if (this.keys.size > 0 && !this.isTypingTarget(document.activeElement)) {
+        this.updateBasis();
+
+        const forwardFlat = new THREE.Vector3(this.forward.x, 0, this.forward.z);
+        if (forwardFlat.lengthSq() < 1e-6) forwardFlat.set(0, 0, -1);
+        forwardFlat.normalize();
+
+        const rightFlat = new THREE.Vector3().crossVectors(forwardFlat, this.up).normalize();
+
+        const move = new THREE.Vector3();
+        if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) move.add(forwardFlat);
+        if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) move.sub(forwardFlat);
+        if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) move.add(rightFlat);
+        if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) move.sub(rightFlat);
+        if (this.keys.has('Space')) move.add(this.up);
+        if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) move.sub(this.up);
+
+        if (move.lengthSq() > 0) {
+          move.normalize().multiplyScalar(MOVE_SPEED * dt);
+          this.applyMoveDelta(move);
+        }
+      }
+
+      this.moveLoopId = requestAnimationFrame(this.tickMovement);
+    }
+  };
 
   private getMinCenterY(mesh: THREE.Mesh): number {
     const box = new THREE.Box3().setFromObject(mesh);
@@ -239,14 +301,7 @@ export class ObjectInteraction {
       this.updateBasis();
       const pan = this.right.clone().multiplyScalar(-dx * PAN_SENS)
         .add(new THREE.Vector3(0, 1, 0).multiplyScalar(dy * PAN_SENS));
-      this.camPos.add(pan);
-
-      if (this.drag) {
-        const pos = this.drag.lastPos.clone().add(pan);
-        this.clampAndSetDragPosition(pos);
-      }
-
-      this.applyCamera();
+      this.applyMoveDelta(pan);
       return;
     }
 

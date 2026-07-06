@@ -30,7 +30,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       role: 'assistant',
-      text: 'Drag objects (LMB), look around (RMB), pan on empty space (LMB), scroll to fly forward — scroll also moves you + object while dragging.',
+      text: 'WASD to move, Space up, Shift down, RMB look, LMB drag objects, scroll to fly forward.',
     },
   ]);
 
@@ -116,7 +116,7 @@ export default function App() {
           {!ready && <span className="badge">Loading physics…</span>}
           {ready && <span className="badge ok">Sim running</span>}
           {apiKey ? <span className="badge ok">Script mode</span> : <span className="badge">Local mode</span>}
-          {ready && <span className="badge hint">LMB drag · RMB look · Scroll move</span>}
+          {ready && <span className="badge hint">WASD move · RMB look</span>}
         </div>
       </header>
 
