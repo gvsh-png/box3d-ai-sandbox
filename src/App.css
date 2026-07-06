@@ -58,6 +58,11 @@
   border-color: #2d5a3d;
 }
 
+.badge.hint {
+  color: #9ab;
+  border-color: #334;
+}
+
 .viewport {
   flex: 1;
   width: 100%;

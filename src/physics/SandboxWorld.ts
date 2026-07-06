@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { ObjectInteraction } from './ObjectInteraction';
 import type {
   AddJointCommand,
   ApplyForceCommand,
@@ -53,6 +54,7 @@ export class SandboxWorld {
   private container: HTMLElement;
   private nextId = 0;
   private ready = false;
+  private interaction: ObjectInteraction | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -75,7 +77,6 @@ export class SandboxWorld {
 
     this.addLights();
     this.addGrid();
-    this.setupOrbitControls();
     window.addEventListener('resize', this.onResize);
   }
 
@@ -83,6 +84,11 @@ export class SandboxWorld {
     await RAPIER.init();
     this.world = new RAPIER.World({ x: 0, y: -10, z: 0 });
     this.spawnGround({ action: 'spawnGround' });
+    this.interaction = new ObjectInteraction(
+      this.renderer.domElement,
+      this.camera,
+      () => this.bodies,
+    );
     this.ready = true;
     this.tick();
   }
@@ -151,6 +157,8 @@ export class SandboxWorld {
   dispose(): void {
     cancelAnimationFrame(this.animationId);
     window.removeEventListener('resize', this.onResize);
+    this.interaction?.dispose();
+    this.interaction = null;
     this.clearAll();
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
@@ -173,44 +181,6 @@ export class SandboxWorld {
 
   private addGrid(): void {
     this.scene.add(new THREE.GridHelper(40, 40, 0x333340, 0x222228));
-  }
-
-  private setupOrbitControls(): void {
-    const canvas = this.renderer.domElement;
-    let isDragging = false;
-    let prevX = 0;
-    let prevY = 0;
-    let theta = 0.8;
-    let phi = 0.6;
-    let radius = 16;
-    const target = new THREE.Vector3(0, 2, 0);
-
-    const updateCamera = () => {
-      this.camera.position.x = target.x + radius * Math.sin(phi) * Math.cos(theta);
-      this.camera.position.y = target.y + radius * Math.cos(phi);
-      this.camera.position.z = target.z + radius * Math.sin(phi) * Math.sin(theta);
-      this.camera.lookAt(target);
-    };
-    updateCamera();
-
-    canvas.addEventListener('pointerdown', (e) => {
-      isDragging = true;
-      prevX = e.clientX;
-      prevY = e.clientY;
-    });
-    window.addEventListener('pointerup', () => { isDragging = false; });
-    window.addEventListener('pointermove', (e) => {
-      if (!isDragging) return;
-      theta -= (e.clientX - prevX) * 0.005;
-      phi = Math.max(0.15, Math.min(1.4, phi - (e.clientY - prevY) * 0.005));
-      prevX = e.clientX;
-      prevY = e.clientY;
-      updateCamera();
-    });
-    canvas.addEventListener('wheel', (e) => {
-      radius = Math.max(5, Math.min(40, radius + e.deltaY * 0.02));
-      updateCamera();
-    });
   }
 
   private onResize = (): void => {

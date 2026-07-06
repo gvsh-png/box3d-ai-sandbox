@@ -30,7 +30,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       role: 'assistant',
-      text: 'Box3D AI Sandbox — AI writes JavaScript to build anything. Add your OpenRouter key (+) and try "spawn a purple circle" or a full destruction scene.',
+      text: 'Box3D AI Sandbox — AI builds scenes via scripts. Drag objects with left-click, orbit with right-click, scroll to zoom.',
     },
   ]);
 
@@ -116,6 +116,7 @@ export default function App() {
           {!ready && <span className="badge">Loading physics…</span>}
           {ready && <span className="badge ok">Sim running</span>}
           {apiKey ? <span className="badge ok">Script mode</span> : <span className="badge">Local mode</span>}
+          {ready && <span className="badge hint">LMB drag · RMB orbit</span>}
         </div>
       </header>
 
