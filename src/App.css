@@ -1,0 +1,105 @@
+.app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #0a0a0c;
+}
+
+.top-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  pointer-events: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #f0f0f4;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.8);
+}
+
+.brand-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 8px #4ade80;
+}
+
+.status {
+  display: flex;
+  gap: 8px;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(20, 20, 26, 0.75);
+  border: 1px solid #333;
+  color: #aaa;
+  backdrop-filter: blur(8px);
+}
+
+.badge.ok {
+  color: #86efac;
+  border-color: #2d5a3d;
+}
+
+.viewport {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+}
+
+.log-panel {
+  position: absolute;
+  top: 52px;
+  left: 16px;
+  width: min(340px, calc(100% - 32px));
+  max-height: calc(100% - 140px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.log-entry {
+  font-size: 13px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(16, 16, 22, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(10px);
+  color: #c8c8d0;
+  line-height: 1.45;
+}
+
+.log-entry.user {
+  align-self: flex-start;
+  border-color: rgba(126, 184, 255, 0.2);
+  color: #dce8ff;
+}
+
+.log-entry.assistant {
+  align-self: flex-start;
+}
+
+.log-entry.error {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: #fca5a5;
+}

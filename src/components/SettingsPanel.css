@@ -1,0 +1,103 @@
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  backdrop-filter: blur(4px);
+}
+
+.settings-panel {
+  width: min(440px, 100%);
+  background: #16161c;
+  border: 1px solid #333;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.settings-panel h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.settings-hint {
+  margin: 0 0 20px;
+  font-size: 13px;
+  color: #999;
+  line-height: 1.5;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #bbb;
+}
+
+.field input,
+.field select {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #3a3a44;
+  background: #0f0f14;
+  color: #eee;
+  outline: none;
+}
+
+.field input:focus,
+.field select:focus {
+  border-color: #5a8fd4;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid #444;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn.secondary {
+  background: transparent;
+  color: #ccc;
+}
+
+.btn.primary {
+  background: #f0f0f4;
+  color: #111;
+  border-color: #f0f0f4;
+}
+
+.quick-examples {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #2a2a32;
+}
+
+.quick-examples h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: #888;
+  font-weight: 500;
+}
+
+.quick-examples ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: #aaa;
+  line-height: 1.8;
+}
