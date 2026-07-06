@@ -26,15 +26,17 @@ const MOVE_SPEED = 10;
 
 /**
  * Fly camera + object dragging.
- * RMB: look around | LMB on object: drag | LMB on empty: pan | Scroll: move forward (moves object too while dragging)
+ * LMB: drag object / pan empty | RMB: look (works while holding LMB drag) | Scroll: move
  */
 export class ObjectInteraction {
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
   private drag: DragState | null = null;
   private hovered: Pickable | null = null;
-  private lookDragging = false;
-  private panDragging = false;
+  private lmbDown = false;
+  private rmbDown = false;
+  private panActive = false;
+  private capturePointerId: number | null = null;
   private pointerPrev = { x: 0, y: 0 };
 
   private camPos = new THREE.Vector3(8, 6, 12);
@@ -219,35 +221,55 @@ export class ObjectInteraction {
     return this.raycaster.ray.intersectPlane(plane, out) !== null;
   }
 
+  private capturePointer(e: PointerEvent): void {
+    if (this.capturePointerId === null) {
+      this.canvas.setPointerCapture(e.pointerId);
+      this.capturePointerId = e.pointerId;
+    }
+  }
+
+  private releaseCapture(e: PointerEvent): void {
+    if (this.capturePointerId === e.pointerId) {
+      try {
+        this.canvas.releasePointerCapture(e.pointerId);
+      } catch {
+        /* already released */
+      }
+      this.capturePointerId = null;
+    }
+  }
+
+  private anyButtonDown(): boolean {
+    return this.lmbDown || this.rmbDown || this.panActive;
+  }
+
   private onPointerDown = (e: PointerEvent): void => {
     if (this.disposed) return;
 
     this.pointerPrev = { x: e.clientX, y: e.clientY };
 
-    // Right mouse → look around
     if (e.button === 2) {
-      this.lookDragging = true;
-      this.canvas.setPointerCapture(e.pointerId);
+      this.rmbDown = true;
+      this.capturePointer(e);
       e.preventDefault();
       return;
     }
 
-    // Middle mouse → pan
     if (e.button === 1) {
-      this.panDragging = true;
-      this.canvas.setPointerCapture(e.pointerId);
+      this.panActive = true;
+      this.capturePointer(e);
       e.preventDefault();
       return;
     }
 
     if (e.button !== 0) return;
 
+    this.lmbDown = true;
     const hit = this.pick(e);
 
-    // Left on empty space → pan (free move, not orbit-locked)
     if (!hit || !hit.body.isDynamic()) {
-      this.panDragging = true;
-      this.canvas.setPointerCapture(e.pointerId);
+      this.panActive = true;
+      this.capturePointer(e);
       return;
     }
 
@@ -261,7 +283,7 @@ export class ObjectInteraction {
 
     if (!this.planeHit(e, plane, hitPoint)) return;
 
-    this.canvas.setPointerCapture(e.pointerId);
+    this.capturePointer(e);
     this.canvas.style.cursor = 'grabbing';
 
     const savedType = hit.body.bodyType();
@@ -290,49 +312,68 @@ export class ObjectInteraction {
     const dy = e.clientY - this.pointerPrev.y;
     this.pointerPrev = { x: e.clientX, y: e.clientY };
 
-    if (this.lookDragging) {
+    let cameraChanged = false;
+
+    // RMB look — works even while LMB is dragging an object
+    if (this.rmbDown) {
       this.yaw -= dx * LOOK_SENS;
       this.pitch = Math.max(-1.52, Math.min(1.52, this.pitch - dy * LOOK_SENS));
-      this.applyCamera();
-      return;
+      cameraChanged = true;
     }
 
-    if (this.panDragging) {
+    // Pan empty space / middle mouse
+    if (this.panActive && !this.drag && !this.rmbDown) {
       this.updateBasis();
       const pan = this.right.clone().multiplyScalar(-dx * PAN_SENS)
         .add(new THREE.Vector3(0, 1, 0).multiplyScalar(dy * PAN_SENS));
       this.applyMoveDelta(pan);
+      if (cameraChanged) this.applyCamera();
       return;
     }
 
-    if (this.drag) {
+    // Object drag — LMB only, pause while RMB look is active
+    if (this.drag && this.lmbDown && !this.rmbDown) {
       const hitPoint = new THREE.Vector3();
-      if (!this.planeHit(e, this.drag.plane, hitPoint)) return;
-
-      const pos = hitPoint.add(this.drag.offset);
-      this.clampAndSetDragPosition(pos);
+      if (this.planeHit(e, this.drag.plane, hitPoint)) {
+        const pos = hitPoint.add(this.drag.offset);
+        this.clampAndSetDragPosition(pos);
+      }
+      if (cameraChanged) this.applyCamera();
       return;
     }
 
-    const hit = this.pick(e);
-    if (hit?.body.isDynamic()) {
-      this.setHover(hit);
-      this.canvas.style.cursor = 'grab';
-    } else {
-      this.setHover(null);
-      this.canvas.style.cursor = 'default';
+    if (cameraChanged) {
+      this.applyCamera();
+      return;
+    }
+
+    if (!this.lmbDown && !this.rmbDown) {
+      const hit = this.pick(e);
+      if (hit?.body.isDynamic()) {
+        this.setHover(hit);
+        this.canvas.style.cursor = 'grab';
+      } else {
+        this.setHover(null);
+        this.canvas.style.cursor = 'default';
+      }
     }
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    this.lookDragging = false;
-    this.panDragging = false;
-    try {
-      this.canvas.releasePointerCapture(e.pointerId);
-    } catch {
-      /* already released */
+    if (e.button === 2) {
+      this.rmbDown = false;
+    } else if (e.button === 1) {
+      this.panActive = false;
+    } else if (e.button === 0) {
+      this.lmbDown = false;
+      this.panActive = false;
+      this.releaseDrag();
     }
-    this.releaseDrag();
+
+    if (!this.anyButtonDown()) {
+      this.releaseCapture(e);
+      this.canvas.style.cursor = this.hovered ? 'grab' : 'default';
+    }
   };
 
   private releaseDrag(): void {
@@ -349,7 +390,9 @@ export class ObjectInteraction {
     );
 
     this.drag = null;
-    this.canvas.style.cursor = this.hovered ? 'grab' : 'default';
+    if (!this.lmbDown) {
+      this.canvas.style.cursor = this.hovered ? 'grab' : 'default';
+    }
   }
 
   private setHover(entry: Pickable | null): void {
