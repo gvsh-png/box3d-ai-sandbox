@@ -56,10 +56,11 @@ export function SettingsPanel({ apiKey, model, onSave, onClose }: Props) {
         <section className="quick-examples">
           <h3>Try saying</h3>
           <ul>
+            <li>Spawn a purple circle</li>
             <li>Generate 4 boxes from the sky</li>
-            <li>Drop 10 colorful spheres</li>
-            <li>Zero gravity space mode</li>
-            <li>Explode in the center</li>
+            <li>50 block jenga tower (wood)</li>
+            <li>Container with 100 bouncy spheres</li>
+            <li>Ramp with 20 dominoes</li>
             <li>Clear everything</li>
           </ul>
         </section>

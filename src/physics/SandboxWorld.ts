@@ -1,22 +1,41 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type {
+  AddJointCommand,
+  ApplyForceCommand,
   CommandBatch,
   ExplodeCommand,
+  MaterialPreset,
   PauseCommand,
   SetGravityCommand,
+  SetMotorCommand,
   SimulationCommand,
   SpawnBodyCommand,
+  SpawnContainerCommand,
   SpawnGroundCommand,
+  SpawnPatternCommand,
+  SpawnRampCommand,
+  Vec3,
 } from '../types/commands';
 
 type BodyEntry = {
   mesh: THREE.Mesh;
   body: RAPIER.RigidBody;
   collider: RAPIER.Collider;
+  id: string;
 };
 
+type MotorState = { torque: number; axis: Vec3 };
+
 const SKY_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22'];
+const DEG = Math.PI / 180;
+
+const MATERIALS: Record<MaterialPreset, { density: number; friction: number; restitution: number; color: string; metalness: number }> = {
+  default: { density: 1, friction: 0.4, restitution: 0.2, color: '#3498db', metalness: 0.15 },
+  wood: { density: 0.55, friction: 0.55, restitution: 0.15, color: '#8B4513', metalness: 0.05 },
+  iron: { density: 7.5, friction: 0.45, restitution: 0.1, color: '#5a5a6a', metalness: 0.7 },
+  rubber: { density: 1.1, friction: 0.8, restitution: 0.92, color: '#2ecc71', metalness: 0.1 },
+};
 
 export class SandboxWorld {
   readonly scene: THREE.Scene;
@@ -25,6 +44,9 @@ export class SandboxWorld {
 
   private world: RAPIER.World | null = null;
   private bodies: BodyEntry[] = [];
+  private bodyById = new Map<string, BodyEntry>();
+  private motors = new Map<string, MotorState>();
+  private joints: RAPIER.ImpulseJoint[] = [];
   private groundEntry: BodyEntry | null = null;
   private animationId = 0;
   private paused = false;
@@ -70,9 +92,10 @@ export class SandboxWorld {
   }
 
   getSceneSummary(): string {
-    const dynamic = this.bodies.length;
+    const dynamic = this.bodies.filter((b) => b.body.isDynamic()).length;
     const gravity = this.world?.gravity ?? { x: 0, y: -10, z: 0 };
-    return `${dynamic} dynamic bodies, gravity (${gravity.x}, ${gravity.y}, ${gravity.z}), paused=${this.paused}`;
+    const ids = [...this.bodyById.keys()].slice(0, 12).join(', ');
+    return `${this.bodies.length} bodies (${dynamic} dynamic), gravity (${gravity.x}, ${gravity.y}, ${gravity.z}), ids: [${ids}]`;
   }
 
   executeBatch(batch: CommandBatch): string {
@@ -89,6 +112,24 @@ export class SandboxWorld {
       case 'spawn':
         this.spawnBodies(cmd);
         break;
+      case 'spawnPattern':
+        this.spawnPattern(cmd);
+        break;
+      case 'spawnContainer':
+        this.spawnContainer(cmd);
+        break;
+      case 'spawnRamp':
+        this.spawnRamp(cmd);
+        break;
+      case 'addJoint':
+        this.addJoint(cmd);
+        break;
+      case 'setMotor':
+        this.setMotor(cmd);
+        break;
+      case 'applyForce':
+        this.applyForce(cmd);
+        break;
       case 'spawnGround':
         this.spawnGround(cmd);
         break;
@@ -96,7 +137,7 @@ export class SandboxWorld {
         this.setGravity(cmd);
         break;
       case 'clear':
-        this.clearDynamic();
+        this.clearSpawned();
         break;
       case 'pause':
         this.setPaused(cmd);
@@ -116,9 +157,7 @@ export class SandboxWorld {
   }
 
   private addLights(): void {
-    const ambient = new THREE.AmbientLight(0x404050, 0.6);
-    this.scene.add(ambient);
-
+    this.scene.add(new THREE.AmbientLight(0x404050, 0.6));
     const sun = new THREE.DirectionalLight(0xffffff, 1.2);
     sun.position.set(10, 20, 8);
     sun.castShadow = true;
@@ -133,8 +172,7 @@ export class SandboxWorld {
   }
 
   private addGrid(): void {
-    const grid = new THREE.GridHelper(40, 40, 0x333340, 0x222228);
-    this.scene.add(grid);
+    this.scene.add(new THREE.GridHelper(40, 40, 0x333340, 0x222228));
   }
 
   private setupOrbitControls(): void {
@@ -153,7 +191,6 @@ export class SandboxWorld {
       this.camera.position.z = target.z + radius * Math.sin(phi) * Math.sin(theta);
       this.camera.lookAt(target);
     };
-
     updateCamera();
 
     canvas.addEventListener('pointerdown', (e) => {
@@ -161,15 +198,11 @@ export class SandboxWorld {
       prevX = e.clientX;
       prevY = e.clientY;
     });
-    window.addEventListener('pointerup', () => {
-      isDragging = false;
-    });
+    window.addEventListener('pointerup', () => { isDragging = false; });
     window.addEventListener('pointermove', (e) => {
       if (!isDragging) return;
-      const dx = e.clientX - prevX;
-      const dy = e.clientY - prevY;
-      theta -= dx * 0.005;
-      phi = Math.max(0.15, Math.min(1.4, phi - dy * 0.005));
+      theta -= (e.clientX - prevX) * 0.005;
+      phi = Math.max(0.15, Math.min(1.4, phi - (e.clientY - prevY) * 0.005));
       prevX = e.clientX;
       prevY = e.clientY;
       updateCamera();
@@ -195,7 +228,18 @@ export class SandboxWorld {
       return;
     }
 
+    for (const [id, motor] of this.motors) {
+      const entry = this.bodyById.get(id);
+      if (entry) {
+        entry.body.applyTorqueImpulse(
+          { x: motor.axis.x * motor.torque, y: motor.axis.y * motor.torque, z: motor.axis.z * motor.torque },
+          true,
+        );
+      }
+    }
+
     this.world.step();
+
     for (const entry of this.bodies) {
       const t = entry.body.translation();
       const r = entry.body.rotation();
@@ -206,9 +250,274 @@ export class SandboxWorld {
     this.renderer.render(this.scene, this.camera);
   };
 
-  private spawnGround(cmd: SpawnGroundCommand): void {
+  private matProps(material?: MaterialPreset, overrides?: Partial<SpawnBodyCommand>) {
+    const base = MATERIALS[material ?? 'default'] ?? MATERIALS.default;
+    return {
+      density: overrides?.density ?? base.density,
+      friction: overrides?.friction ?? base.friction,
+      restitution: overrides?.restitution ?? base.restitution,
+      color: overrides?.color ?? base.color,
+      metalness: base.metalness,
+    };
+  }
+
+  private eulerQuat(rot?: Vec3): THREE.Quaternion {
+    if (!rot) return new THREE.Quaternion();
+    return new THREE.Quaternion().setFromEuler(new THREE.Euler(rot.x * DEG, rot.y * DEG, rot.z * DEG));
+  }
+
+  private registerEntry(entry: BodyEntry): void {
+    this.bodies.push(entry);
+    this.bodyById.set(entry.id, entry);
+  }
+
+  private spawnBodies(cmd: SpawnBodyCommand): void {
+    const count = Math.min(cmd.count ?? (cmd.fromSky ? 4 : 1), 120);
+    for (let i = 0; i < count; i++) {
+      const spread = cmd.fromSky ? 6 : 2;
+      const offsetX = count > 1 ? (Math.random() - 0.5) * spread : 0;
+      const offsetZ = count > 1 ? (Math.random() - 0.5) * spread : 0;
+      const y = cmd.fromSky ? 8 + Math.random() * 6 : cmd.position.y;
+
+      this.spawnSingle({
+        ...cmd,
+        id: count > 1 ? `${cmd.id ?? 'body'}-${i}` : cmd.id,
+        position: { x: cmd.position.x + offsetX, y, z: cmd.position.z + offsetZ },
+        color: cmd.color ?? SKY_COLORS[i % SKY_COLORS.length],
+      });
+    }
+  }
+
+  private spawnPattern(cmd: SpawnPatternCommand): void {
+    const count = Math.min(cmd.count, 120);
+    const shape = cmd.shape ?? 'box';
+    const spacing = cmd.spacing ?? 1.05;
+    const base = cmd.position ?? { x: 0, y: 0, z: 0 };
+    const size = cmd.size ?? (cmd.pattern === 'dominoes' ? { x: 0.25, y: 1.4, z: 0.7 } : { x: 1, y: 0.35, z: 1 });
+    const props = this.matProps(cmd.material, {
+      density: cmd.density,
+      restitution: cmd.restitution,
+      color: cmd.color,
+    });
+
+    for (let i = 0; i < count; i++) {
+      let pos = { ...base };
+      let rotation: Vec3 | undefined;
+
+      switch (cmd.pattern) {
+        case 'stack':
+          pos.y = base.y + i * (size.y + 0.02) + size.y / 2;
+          break;
+        case 'jenga':
+          pos.y = base.y + i * (size.y + 0.02) + size.y / 2;
+          pos.x = base.x + (i % 2 === 0 ? -0.15 : 0.15);
+          pos.z = base.z + (i % 4 < 2 ? -0.15 : 0.15);
+          break;
+        case 'line':
+        case 'dominoes':
+          pos.z = base.z + i * spacing;
+          pos.y = base.y + (cmd.pattern === 'dominoes' ? size.y / 2 : size.y / 2);
+          break;
+        case 'circle': {
+          const r = cmd.ringRadius ?? 4;
+          const a = (i / count) * Math.PI * 2;
+          pos.x = base.x + Math.cos(a) * r;
+          pos.z = base.z + Math.sin(a) * r;
+          pos.y = base.y + size.y / 2;
+          break;
+        }
+        case 'grid': {
+          const cols = Math.ceil(Math.sqrt(count));
+          const row = Math.floor(i / cols);
+          const col = i % cols;
+          pos.x = base.x + (col - cols / 2) * spacing;
+          pos.z = base.z + (row - cols / 2) * spacing;
+          pos.y = base.y + size.y / 2;
+          break;
+        }
+        case 'scatter': {
+          const w = cmd.ringRadius ?? 4;
+          pos.x = base.x + (Math.random() - 0.5) * w * 2;
+          pos.z = base.z + (Math.random() - 0.5) * w * 2;
+          pos.y = base.y + 0.5 + Math.random() * (w * 0.8);
+          break;
+        }
+      }
+
+      this.spawnSingle({
+        action: 'spawn',
+        shape,
+        position: pos,
+        size,
+        radius: cmd.radius ?? 0.25,
+        color: cmd.color ?? SKY_COLORS[i % SKY_COLORS.length],
+        density: props.density,
+        friction: props.friction,
+        restitution: cmd.restitution ?? props.restitution,
+        rotation,
+        id: `pattern-${cmd.pattern}-${i}`,
+      });
+    }
+  }
+
+  private spawnContainer(cmd: SpawnContainerCommand): void {
+    const t = cmd.wallThickness ?? 0.3;
+    const pos = cmd.position ?? { x: 0, y: 0, z: 0 };
+    const color = cmd.color ?? '#444455';
+    const h = cmd.height;
+    const w = cmd.width;
+    const d = cmd.depth;
+    const wallY = pos.y + h / 2;
+
+    const walls = [
+      { position: { x: pos.x, y: wallY, z: pos.z - d / 2 }, size: { x: w, y: h, z: t } },
+      { position: { x: pos.x, y: wallY, z: pos.z + d / 2 }, size: { x: w, y: h, z: t } },
+      { position: { x: pos.x - w / 2, y: wallY, z: pos.z }, size: { x: t, y: h, z: d } },
+      { position: { x: pos.x + w / 2, y: wallY, z: pos.z }, size: { x: t, y: h, z: d } },
+    ];
+
+    walls.forEach((wall, i) => {
+      this.spawnSingle({
+        action: 'spawn',
+        shape: 'box',
+        position: wall.position,
+        size: wall.size,
+        color,
+        static: true,
+        id: `wall-${i}`,
+      });
+    });
+  }
+
+  private spawnRamp(cmd: SpawnRampCommand): void {
+    const thickness = 0.4;
+    this.spawnSingle({
+      action: 'spawn',
+      shape: 'box',
+      position: cmd.position,
+      size: { x: cmd.width, y: thickness, z: cmd.length },
+      color: cmd.color ?? '#6a6a7a',
+      static: true,
+      rotation: { x: -cmd.angle, y: 0, z: 0 },
+      id: 'ramp',
+    });
+  }
+
+  private spawnSingle(cmd: SpawnBodyCommand): void {
     if (!this.world) return;
 
+    const { x, y, z } = cmd.position;
+    const props = this.matProps(cmd.material, cmd);
+    const color = cmd.color ?? props.color;
+    let mesh: THREE.Mesh;
+    let colliderDesc: RAPIER.ColliderDesc;
+
+    if (cmd.shape === 'sphere') {
+      const r = cmd.radius ?? 0.5;
+      mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(r, 20, 20),
+        new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: props.metalness }),
+      );
+      colliderDesc = RAPIER.ColliderDesc.ball(r);
+    } else if (cmd.shape === 'capsule') {
+      const r = cmd.radius ?? 0.35;
+      const h = cmd.height ?? 1;
+      mesh = new THREE.Mesh(
+        new THREE.CapsuleGeometry(r, h, 8, 16),
+        new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: props.metalness }),
+      );
+      colliderDesc = RAPIER.ColliderDesc.capsule(h / 2, r);
+    } else if (cmd.shape === 'cylinder') {
+      const r = cmd.radius ?? 0.4;
+      const h = cmd.height ?? 0.3;
+      mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(r, r, h, 20),
+        new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: props.metalness }),
+      );
+      colliderDesc = RAPIER.ColliderDesc.cylinder(h / 2, r);
+    } else {
+      const size = cmd.size ?? { x: 1, y: 1, z: 1 };
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(size.x, size.y, size.z),
+        new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: props.metalness }),
+      );
+      colliderDesc = RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2);
+    }
+
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const quat = this.eulerQuat(cmd.rotation);
+    mesh.position.set(x, y, z);
+    mesh.quaternion.copy(quat);
+
+    const id = cmd.id ?? `body-${this.nextId++}`;
+    mesh.userData.sandboxId = id;
+    this.scene.add(mesh);
+
+    const bodyDesc = cmd.static
+      ? RAPIER.RigidBodyDesc.fixed()
+      : RAPIER.RigidBodyDesc.dynamic();
+    bodyDesc.setTranslation(x, y, z);
+    bodyDesc.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+    const body = this.world.createRigidBody(bodyDesc);
+
+    colliderDesc.setDensity(cmd.static ? 0 : (cmd.density ?? props.density));
+    colliderDesc.setFriction(cmd.friction ?? props.friction);
+    colliderDesc.setRestitution(cmd.restitution ?? props.restitution);
+    const collider = this.world.createCollider(colliderDesc, body);
+
+    if (cmd.velocity) {
+      body.setLinvel(cmd.velocity, true);
+    } else if (cmd.fromSky) {
+      body.setLinvel({ x: (Math.random() - 0.5) * 2, y: -1, z: (Math.random() - 0.5) * 2 }, true);
+    }
+
+    this.registerEntry({ mesh, body, collider, id });
+  }
+
+  private addJoint(cmd: AddJointCommand): void {
+    if (!this.world) return;
+    const a = this.bodyById.get(cmd.bodyA);
+    const b = this.bodyById.get(cmd.bodyB);
+    if (!a || !b) return;
+
+    const axis = cmd.axis ?? { x: 1, y: 0, z: 0 };
+    const jointData =
+      cmd.type === 'fixed'
+        ? RAPIER.JointData.fixed({ x: 0, y: 0, z: 0 }, { w: 1, x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { w: 1, x: 0, y: 0, z: 0 })
+        : RAPIER.JointData.revolute({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, axis);
+
+    const joint = this.world.createImpulseJoint(jointData, a.body, b.body, true);
+    this.joints.push(joint);
+  }
+
+  private setMotor(cmd: SetMotorCommand): void {
+    this.motors.set(cmd.bodyId, {
+      torque: cmd.torque,
+      axis: cmd.axis ?? { x: 1, y: 0, z: 0 },
+    });
+  }
+
+  private applyForce(cmd: ApplyForceCommand): void {
+    if (!this.world) return;
+    const origin = cmd.position ?? { x: 0, y: 0, z: 0 };
+    const radius = cmd.radius;
+
+    for (const entry of this.bodies) {
+      if (!entry.body.isDynamic()) continue;
+      const t = entry.body.translation();
+      if (radius) {
+        const dx = t.x - origin.x;
+        const dy = t.y - origin.y;
+        const dz = t.z - origin.z;
+        if (dx * dx + dy * dy + dz * dz > radius * radius) continue;
+      }
+      entry.body.applyImpulse(cmd.force, true);
+    }
+  }
+
+  private spawnGround(cmd: SpawnGroundCommand): void {
+    if (!this.world) return;
     if (this.groundEntry) {
       this.removeEntry(this.groundEntry);
       this.groundEntry = null;
@@ -228,91 +537,17 @@ export class SandboxWorld {
 
     const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(pos.x, pos.y, pos.z);
     const body = this.world.createRigidBody(bodyDesc);
-    const colliderDesc = RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2);
-    const collider = this.world.createCollider(colliderDesc, body);
+    const collider = this.world.createCollider(
+      RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2),
+      body,
+    );
 
-    this.groundEntry = { mesh, body, collider };
-  }
-
-  private spawnBodies(cmd: SpawnBodyCommand): void {
-    const count = cmd.count ?? (cmd.fromSky ? 4 : 1);
-    for (let i = 0; i < count; i++) {
-      const spread = cmd.fromSky ? 6 : 2;
-      const offsetX = (Math.random() - 0.5) * spread;
-      const offsetZ = (Math.random() - 0.5) * spread;
-      const y = cmd.fromSky ? 8 + Math.random() * 6 : cmd.position.y;
-
-      this.spawnSingle({
-        ...cmd,
-        position: {
-          x: cmd.position.x + offsetX,
-          y,
-          z: cmd.position.z + offsetZ,
-        },
-        color: cmd.color ?? SKY_COLORS[i % SKY_COLORS.length],
-      });
-    }
-  }
-
-  private spawnSingle(cmd: SpawnBodyCommand): void {
-    if (!this.world) return;
-
-    const { x, y, z } = cmd.position;
-    const color = cmd.color ?? '#3498db';
-    let mesh: THREE.Mesh;
-    let colliderDesc: RAPIER.ColliderDesc;
-
-    if (cmd.shape === 'sphere') {
-      const r = cmd.radius ?? 0.5;
-      mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(r, 24, 24),
-        new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.2 }),
-      );
-      colliderDesc = RAPIER.ColliderDesc.ball(r);
-    } else if (cmd.shape === 'capsule') {
-      const r = cmd.radius ?? 0.35;
-      const h = cmd.height ?? 1;
-      mesh = new THREE.Mesh(
-        new THREE.CapsuleGeometry(r, h, 8, 16),
-        new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.2 }),
-      );
-      colliderDesc = RAPIER.ColliderDesc.capsule(h / 2, r);
-    } else {
-      const size = cmd.size ?? { x: 1, y: 1, z: 1 };
-      mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(size.x, size.y, size.z),
-        new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.15 }),
-      );
-      colliderDesc = RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2);
-    }
-
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    mesh.position.set(x, y, z);
-    mesh.userData.sandboxId = cmd.id ?? `body-${this.nextId++}`;
-    this.scene.add(mesh);
-
-    const bodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z);
-    const body = this.world.createRigidBody(bodyDesc);
-
-    colliderDesc.setDensity(cmd.density ?? 1);
-    colliderDesc.setFriction(cmd.friction ?? 0.4);
-    colliderDesc.setRestitution(cmd.restitution ?? 0.2);
-    const collider = this.world.createCollider(colliderDesc, body);
-
-    if (cmd.velocity) {
-      body.setLinvel(cmd.velocity, true);
-    } else if (cmd.fromSky) {
-      body.setLinvel({ x: (Math.random() - 0.5) * 2, y: -1, z: (Math.random() - 0.5) * 2 }, true);
-    }
-
-    this.bodies.push({ mesh, body, collider });
+    this.groundEntry = { mesh, body, collider, id: 'ground' };
   }
 
   private setGravity(cmd: SetGravityCommand): void {
     if (!this.world) return;
-    const g = cmd.gravity;
-    this.world.gravity = { x: g.x, y: g.y, z: g.z };
+    this.world.gravity = { ...cmd.gravity };
   }
 
   private setPaused(cmd: PauseCommand): void {
@@ -323,6 +558,7 @@ export class SandboxWorld {
     if (!this.world) return;
     const { x, y, z } = cmd.position;
     for (const entry of this.bodies) {
+      if (!entry.body.isDynamic()) continue;
       const t = entry.body.translation();
       const dx = t.x - x;
       const dy = t.y - y;
@@ -335,15 +571,18 @@ export class SandboxWorld {
     }
   }
 
-  private clearDynamic(): void {
+  private clearSpawned(): void {
     for (const entry of [...this.bodies]) {
       this.removeEntry(entry);
     }
     this.bodies = [];
+    this.bodyById.clear();
+    this.motors.clear();
+    this.joints = [];
   }
 
   private clearAll(): void {
-    this.clearDynamic();
+    this.clearSpawned();
     if (this.groundEntry) {
       this.removeEntry(this.groundEntry);
       this.groundEntry = null;
@@ -358,6 +597,8 @@ export class SandboxWorld {
     this.scene.remove(entry.mesh);
     entry.mesh.geometry.dispose();
     (entry.mesh.material as THREE.Material).dispose();
+    this.bodyById.delete(entry.id);
+    this.motors.delete(entry.id);
     if (this.world) {
       this.world.removeRigidBody(entry.body);
     }

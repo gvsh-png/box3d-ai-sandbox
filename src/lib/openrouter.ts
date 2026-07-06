@@ -1,4 +1,5 @@
 import { COMMAND_SCHEMA, type CommandBatch } from '../types/commands';
+import { normalizeBatch } from './normalize';
 
 export const MODELS = [
   { id: 'deepseek/deepseek-v4-flash:nitro', label: 'DeepSeek V4 Flash (fastest)' },
@@ -43,11 +44,20 @@ export async function parsePromptWithAI(
     { role: 'system', content: COMMAND_SCHEMA },
     {
       role: 'user',
-      content: `Current scene: ${sceneSummary}\n\nUser request: ${userPrompt}`,
+      content: `Scene: ${sceneSummary}\n\nRequest: ${userPrompt}`,
     },
   ];
 
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const body = {
+    model,
+    messages,
+    temperature: 0.15,
+    max_tokens: 2048,
+    response_format: { type: 'json_object' as const },
+    provider: { sort: 'latency' as const },
+  };
+
+  let res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -55,16 +65,7 @@ export async function parsePromptWithAI(
       'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'https://box3d-ai-sandbox',
       'X-Title': 'Box3D AI Sandbox',
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.1,
-      max_tokens: 256,
-      response_format: { type: 'json_object' },
-      provider: {
-        sort: 'latency',
-      },
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
@@ -72,50 +73,101 @@ export async function parsePromptWithAI(
     throw new Error(`OpenRouter error ${res.status}: ${err}`);
   }
 
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) throw new Error('Empty response from model');
+  let data = await res.json();
+  let content = extractContent(data);
 
-  return parseCommandJson(content);
+  if (!content) {
+    const { response_format: _, ...noJson } = body;
+    res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'https://box3d-ai-sandbox',
+        'X-Title': 'Box3D AI Sandbox',
+      },
+      body: JSON.stringify(noJson),
+    });
+    if (!res.ok) throw new Error(`OpenRouter retry failed: ${await res.text()}`);
+    data = await res.json();
+    content = extractContent(data);
+  }
+
+  if (!content) throw new Error('Empty response from model — try rephrasing or a different model.');
+
+  return normalizeBatch(parseCommandJson(content), userPrompt);
+}
+
+function extractContent(data: {
+  choices?: Array<{ message?: { content?: string; reasoning?: string } }>;
+}): string | undefined {
+  const msg = data.choices?.[0]?.message;
+  if (!msg) return undefined;
+  if (msg.content?.trim()) return msg.content;
+  if (msg.reasoning?.trim()) {
+    const match = msg.reasoning.match(/\{[\s\S]*"commands"[\s\S]*\}/);
+    if (match) return match[0];
+  }
+  return undefined;
 }
 
 export function parseCommandJson(raw: string): CommandBatch {
   const cleaned = raw.replace(/```json\n?|\n?```/g, '').trim();
-  const parsed = JSON.parse(cleaned) as CommandBatch;
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  const jsonStr = start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned;
+  const parsed = JSON.parse(jsonStr) as CommandBatch;
   if (!Array.isArray(parsed.commands)) {
     throw new Error('Invalid command batch: missing commands array');
   }
   return parsed;
 }
 
-/** Offline fallback — also used for instant responses on simple spawn phrases. */
-export function localParse(prompt: string): CommandBatch | null {
+/**
+ * Strict fast-path only — avoids stealing prompts from the AI.
+ * Matches: "4 boxes from sky", "clear", "moon gravity", etc.
+ */
+export function tryLocalParse(prompt: string): CommandBatch | null {
   const lower = prompt.toLowerCase().trim();
 
-  if (/clear|reset|empty/.test(lower)) {
+  if (/^(clear|reset|empty)$/.test(lower) || /^delete\s+(everything|all)$/.test(lower)) {
     return { message: 'Cleared the scene.', commands: [{ action: 'clear' }] };
   }
 
-  if (/pause|stop/.test(lower)) {
+  if (/^(pause|stop)$/.test(lower)) {
     return { message: 'Simulation paused.', commands: [{ action: 'pause', paused: true }] };
   }
 
-  if (/resume|play|unpause/.test(lower)) {
+  if (/^(resume|play|unpause)$/.test(lower)) {
     return { message: 'Simulation resumed.', commands: [{ action: 'pause', paused: false }] };
   }
 
-  const countMatch = lower.match(/(\d+)\s*(box|boxes|cube|cubes|sphere|spheres|ball|balls)?/);
-  const count = countMatch ? parseInt(countMatch[1], 10) : /spawn|drop|generate|create/.test(lower) ? 1 : 0;
-  const shape = /sphere|ball/.test(lower) ? 'sphere' : 'box';
-  const fromSky = /sky|fall|drop|rain|from the/.test(lower);
-  const isBig = /big|large|huge|giant/.test(lower);
-  const size = isBig ? { x: 2.5, y: 2.5, z: 2.5 } : { x: 1, y: 1, z: 1 };
-  const sizeLabel = isBig ? 'big ' : '';
+  if (/^(low gravity|moon gravity|moon)$/.test(lower)) {
+    return { message: 'Moon gravity enabled.', commands: [{ action: 'setGravity', gravity: { x: 0, y: -1.6, z: 0 } }] };
+  }
 
-  if (count > 0 && /box|boxes|cube|cubes|sphere|ball|spawn|drop|generate|create|sky|fall|rain/.test(lower)) {
-    const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c'];
+  if (/^(zero gravity|no gravity|space)$/.test(lower)) {
+    return { message: 'Zero gravity.', commands: [{ action: 'setGravity', gravity: { x: 0, y: 0, z: 0 } }] };
+  }
+
+  if (/^(explode|boom|blast)$/.test(lower)) {
     return {
-      message: `Spawning ${count} ${sizeLabel}${shape}${count > 1 ? 'es' : ''}${fromSky ? ' from the sky' : ''}.`,
+      message: 'Boom!',
+      commands: [{ action: 'explode', position: { x: 0, y: 2, z: 0 }, radius: 6, strength: 25 }],
+    };
+  }
+
+  const numbered = lower.match(
+    /^(?:(?:spawn|drop|generate|create)\s+)?(\d+)\s+(big\s+)?(boxes?|cubes?|spheres?|balls?)(?:\s+from\s+(?:the\s+)?sky)?$/,
+  );
+  if (numbered) {
+    const count = parseInt(numbered[1], 10);
+    const isBig = !!numbered[2];
+    const shape = /sphere|ball/.test(numbered[3]) ? 'sphere' : 'box';
+    const fromSky = /sky/.test(lower);
+    const size = isBig ? { x: 2.5, y: 2.5, z: 2.5 } : { x: 1, y: 1, z: 1 };
+    return {
+      message: `Spawning ${count} ${isBig ? 'big ' : ''}${shape}${count > 1 ? 's' : ''}${fromSky ? ' from the sky' : ''}.`,
       commands: [
         {
           action: 'spawn',
@@ -123,7 +175,6 @@ export function localParse(prompt: string): CommandBatch | null {
           position: { x: 0, y: fromSky ? 12 : 3, z: 0 },
           size,
           radius: isBig ? 1.2 : 0.5,
-          color: colors[Math.floor(Math.random() * colors.length)],
           fromSky,
           count,
         },
@@ -131,42 +182,8 @@ export function localParse(prompt: string): CommandBatch | null {
     };
   }
 
-  if (/^spawn$/.test(lower)) {
-    return {
-      message: 'Spawning 1 box.',
-      commands: [
-        {
-          action: 'spawn',
-          shape: 'box',
-          position: { x: 0, y: 3, z: 0 },
-          size: { x: 1, y: 1, z: 1 },
-          fromSky: false,
-          count: 1,
-        },
-      ],
-    };
-  }
-
-  if (/low gravity|moon/.test(lower)) {
-    return {
-      message: 'Moon gravity enabled.',
-      commands: [{ action: 'setGravity', gravity: { x: 0, y: -1.6, z: 0 } }],
-    };
-  }
-
-  if (/zero gravity|no gravity|space/.test(lower)) {
-    return {
-      message: 'Zero gravity.',
-      commands: [{ action: 'setGravity', gravity: { x: 0, y: 0, z: 0 } }],
-    };
-  }
-
-  if (/explode|boom|blast/.test(lower)) {
-    return {
-      message: 'Boom!',
-      commands: [{ action: 'explode', position: { x: 0, y: 2, z: 0 }, radius: 6, strength: 25 }],
-    };
-  }
-
   return null;
 }
+
+/** @deprecated use tryLocalParse */
+export const localParse = tryLocalParse;

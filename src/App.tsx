@@ -3,13 +3,14 @@ import { SandboxWorld } from './physics/SandboxWorld';
 import {
   getStoredApiKey,
   getStoredModel,
-  localParse,
   MODELS,
   parsePromptWithAI,
   setStoredApiKey,
   setStoredModel,
+  tryLocalParse,
   type ModelId,
 } from './lib/openrouter';
+import { normalizeBatch } from './lib/normalize';
 import { ChatBar } from './components/ChatBar';
 import { SettingsPanel } from './components/SettingsPanel';
 import './App.css';
@@ -28,7 +29,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       role: 'assistant',
-      text: 'Box3D AI Sandbox ready. Try: "Generate 4 boxes from the sky" or open settings to add your OpenRouter API key.',
+      text: 'Box3D AI Sandbox ready. Add your OpenRouter key (+) for full AI — try "spawn a purple circle" or the architecture test prompts.',
     },
   ]);
 
@@ -59,16 +60,16 @@ export default function App() {
     setLoading(true);
 
     try {
-      const local = localParse(prompt);
+      const local = tryLocalParse(prompt);
       let batch;
 
       if (local) {
-        batch = local;
+        batch = normalizeBatch(local, prompt);
       } else if (apiKey.trim()) {
         const sceneSummary = worldRef.current.getSceneSummary();
         batch = await parsePromptWithAI(apiKey.trim(), model, prompt, sceneSummary);
       } else {
-        throw new Error('No API key set. Open settings (+) and add your OpenRouter key, or try a simple phrase like "4 boxes from the sky".');
+        throw new Error('No API key set. Open settings (+) and add your OpenRouter key, or try "4 boxes from sky" / "clear".');
       }
 
       const msg = worldRef.current.executeBatch(batch);
