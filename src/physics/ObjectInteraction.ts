@@ -1,43 +1,38 @@
 import * as THREE from 'three';
-import type RAPIER from '@dimforge/rapier3d-compat';
+import RAPIER from '@dimforge/rapier3d-compat';
+import type RAPIER_NS from '@dimforge/rapier3d-compat';
 
 type Pickable = {
   mesh: THREE.Mesh;
-  body: RAPIER.RigidBody;
+  body: RAPIER_NS.RigidBody;
   id: string;
 };
 
-type GrabState = {
+type DragState = {
   entry: Pickable;
-  holdDistance: number;
+  plane: THREE.Plane;
+  offset: THREE.Vector3;
+  lastPos: THREE.Vector3;
+  lastTime: number;
+  velocity: THREE.Vector3;
+  savedType: RAPIER_NS.RigidBodyType;
   minCenterY: number;
 };
 
 const GROUND_Y = 0.02;
-
-// ── Tuning ──────────────────────────────────────────────────────────
 const LOOK_SENS = 0.0022;
 const MOVE_SPEED = 14;
-const MOVE_ACCEL = 6; // how fast we reach target speed (higher = snappier)
+const MOVE_ACCEL = 6;
 const SCROLL_SPEED = 2.5;
 
-const GRAB_FOLLOW = 18; // velocity pull toward target
-const GRAB_MAX_SPEED = 22;
-const GRAB_DIST_MIN = 2;
-const GRAB_DIST_MAX = 24;
-const GRAB_SPIN_DAMP = 0.82;
-
 /**
- * FPS sandbox controls:
- *   Hold RMB → look + WASD flies where you aim (W = into the screen)
- *   LMB on object → grab & drag (follows crosshair / view center)
- *   Scroll → move forward (RMB held) or adjust grab distance (LMB held)
+ * WASD always flies where you look · RMB look · LMB cursor-drag objects
  */
 export class ObjectInteraction {
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
 
-  private grab: GrabState | null = null;
+  private drag: DragState | null = null;
   private hovered: Pickable | null = null;
   private lmbDown = false;
   private rmbDown = false;
@@ -79,14 +74,13 @@ export class ObjectInteraction {
   }
 
   update(dt: number): void {
-    if (this.disposed) return;
-    if (this.isEngaged()) this.updateMovement(dt);
-    if (this.grab && this.lmbDown) this.updateGrab(dt);
+    if (this.disposed || this.isTyping()) return;
+    this.updateMovement(dt);
   }
 
   dispose(): void {
     this.disposed = true;
-    this.releaseGrab();
+    this.releaseDrag();
     this.setHover(null);
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
     this.canvas.removeEventListener('pointermove', this.onPointerMove);
@@ -96,11 +90,6 @@ export class ObjectInteraction {
     window.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
-  }
-
-  /** RMB held = mouselook + WASD active */
-  private isEngaged(): boolean {
-    return this.rmbDown;
   }
 
   private isTyping(): boolean {
@@ -134,9 +123,8 @@ export class ObjectInteraction {
     this.keys.delete(e.code);
   };
 
-  /** WASD relative to where camera looks — only while RMB held */
+  /** WASD always — W flies in the direction you are looking */
   private updateMovement(dt: number): void {
-    if (this.isTyping()) return;
     this.updateBasis();
 
     const wish = new THREE.Vector3();
@@ -152,67 +140,46 @@ export class ObjectInteraction {
       targetVel.copy(wish.normalize().multiplyScalar(MOVE_SPEED));
     }
 
-    // Smooth toward target velocity
     const t = 1 - Math.exp(-MOVE_ACCEL * dt);
     this.moveVel.lerp(targetVel, t);
 
     if (this.moveVel.lengthSq() > 1e-6) {
-      this.camPos.addScaledVector(this.moveVel, dt);
+      const delta = this.moveVel.clone().multiplyScalar(dt);
+      this.camPos.add(delta);
+
+      // Move dragged object with camera when flying
+      if (this.drag && this.lmbDown) {
+        const pos = this.drag.lastPos.clone().add(delta);
+        this.setDragPosition(pos);
+      }
+
       this.applyCamera();
     }
-  }
-
-  /** Aim point at center of screen (crosshair) */
-  private getAimPoint(distance: number, out: THREE.Vector3): THREE.Vector3 {
-    this.updateBasis();
-    return out.copy(this.camPos).addScaledVector(this.forward, distance);
-  }
-
-  private updateGrab(dt: number): void {
-    if (!this.grab) return;
-
-    const target = this.getAimPoint(this.grab.holdDistance, new THREE.Vector3());
-    target.y = Math.max(this.grab.minCenterY, target.y);
-
-    const body = this.grab.entry.body;
-    body.wakeUp();
-
-    const pos = body.translation();
-    const vel = body.linvel();
-
-    const dx = target.x - pos.x;
-    const dy = target.y - pos.y;
-    const dz = target.z - pos.z;
-    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-    if (dist > 0.01) {
-      const speed = Math.min(dist * GRAB_FOLLOW, GRAB_MAX_SPEED);
-      const inv = 1 / dist;
-      const desiredVx = dx * inv * speed;
-      const desiredVy = dy * inv * speed;
-      const desiredVz = dz * inv * speed;
-
-      const blend = 1 - Math.exp(-12 * dt);
-      body.setLinvel(
-        {
-          x: vel.x + (desiredVx - vel.x) * blend,
-          y: vel.y + (desiredVy - vel.y) * blend,
-          z: vel.z + (desiredVz - vel.z) * blend,
-        },
-        true,
-      );
-    }
-
-    const av = body.angvel();
-    body.setAngvel(
-      { x: av.x * GRAB_SPIN_DAMP, y: av.y * GRAB_SPIN_DAMP, z: av.z * GRAB_SPIN_DAMP },
-      true,
-    );
   }
 
   private getMinCenterY(mesh: THREE.Mesh): number {
     const box = new THREE.Box3().setFromObject(mesh);
     return GROUND_Y + Math.max(0.15, (box.max.y - box.min.y) * 0.5);
+  }
+
+  private setDragPosition(pos: THREE.Vector3): void {
+    if (!this.drag) return;
+
+    pos.y = Math.max(this.drag.minCenterY, pos.y);
+
+    const now = performance.now();
+    const dt = Math.max(0.001, (now - this.drag.lastTime) / 1000);
+
+    this.drag.velocity.set(
+      (pos.x - this.drag.lastPos.x) / dt,
+      (pos.y - this.drag.lastPos.y) / dt,
+      (pos.z - this.drag.lastPos.z) / dt,
+    );
+
+    this.drag.entry.body.setNextKinematicTranslation({ x: pos.x, y: pos.y, z: pos.z });
+    this.drag.entry.mesh.position.copy(pos);
+    this.drag.lastPos.copy(pos);
+    this.drag.lastTime = now;
   }
 
   private setPointer(e: PointerEvent): void {
@@ -229,6 +196,11 @@ export class ObjectInteraction {
     if (!hits.length) return null;
     const mesh = hits[0].object as THREE.Mesh;
     return this.getPickables().find((p) => p.mesh === mesh) ?? null;
+  }
+
+  private planeHit(ndc: THREE.Vector2, plane: THREE.Plane, out: THREE.Vector3): boolean {
+    this.raycaster.setFromCamera(ndc, this.camera);
+    return this.raycaster.ray.intersectPlane(plane, out) !== null;
   }
 
   private onPointerDown = (e: PointerEvent): void => {
@@ -248,25 +220,41 @@ export class ObjectInteraction {
     this.setPointer(e);
 
     const hit = this.pickAt(this.pointer);
-    if (hit?.body.isDynamic()) {
+    if (!hit?.body.isDynamic()) {
       this.capture(e);
-      this.canvas.style.cursor = 'grabbing';
-
-      const bp = hit.body.translation();
-      const dist = this.camPos.distanceTo(new THREE.Vector3(bp.x, bp.y, bp.z));
-
-      this.grab = {
-        entry: hit,
-        holdDistance: THREE.MathUtils.clamp(dist, GRAB_DIST_MIN, GRAB_DIST_MAX),
-        minCenterY: this.getMinCenterY(hit.mesh),
-      };
-
-      hit.body.wakeUp();
-      hit.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-      this.setHover(hit);
-    } else {
-      this.capture(e);
+      return;
     }
+
+    const hitPoint = new THREE.Vector3();
+    const bodyPos = hit.body.translation();
+    const grabPoint = new THREE.Vector3(bodyPos.x, bodyPos.y, bodyPos.z);
+
+    const normal = new THREE.Vector3();
+    this.camera.getWorldDirection(normal);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, grabPoint);
+
+    if (!this.planeHit(this.pointer, plane, hitPoint)) return;
+
+    this.capture(e);
+    this.canvas.style.cursor = 'grabbing';
+
+    const savedType = hit.body.bodyType();
+    hit.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+    hit.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    hit.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+
+    this.drag = {
+      entry: hit,
+      plane,
+      offset: grabPoint.clone().sub(hitPoint),
+      lastPos: grabPoint.clone(),
+      lastTime: performance.now(),
+      velocity: new THREE.Vector3(),
+      savedType,
+      minCenterY: this.getMinCenterY(hit.mesh),
+    };
+
+    this.setHover(hit);
   };
 
   private onPointerMove = (e: PointerEvent): void => {
@@ -280,6 +268,16 @@ export class ObjectInteraction {
       this.yaw -= dx * LOOK_SENS;
       this.pitch = THREE.MathUtils.clamp(this.pitch - dy * LOOK_SENS, -1.55, 1.55);
       this.applyCamera();
+    }
+
+    // Cursor drag — LMB held, pause while RMB look is active
+    if (this.drag && this.lmbDown && !this.rmbDown) {
+      this.setPointer(e);
+      const hitPoint = new THREE.Vector3();
+      if (this.planeHit(this.pointer, this.drag.plane, hitPoint)) {
+        this.setDragPosition(hitPoint.add(this.drag.offset));
+      }
+      return;
     }
 
     if (!this.lmbDown && !this.rmbDown) {
@@ -298,10 +296,9 @@ export class ObjectInteraction {
   private onPointerUp = (e: PointerEvent): void => {
     if (e.button === 2) {
       this.rmbDown = false;
-      this.moveVel.set(0, 0, 0);
     } else if (e.button === 0) {
       this.lmbDown = false;
-      this.releaseGrab();
+      this.releaseDrag();
     }
 
     if (!this.lmbDown && !this.rmbDown) {
@@ -328,10 +325,20 @@ export class ObjectInteraction {
     }
   }
 
-  private releaseGrab(): void {
-    if (!this.grab) return;
-    this.grab.entry.body.wakeUp();
-    this.grab = null;
+  private releaseDrag(): void {
+    if (!this.drag) return;
+
+    const { entry, velocity, savedType } = this.drag;
+    const t = entry.body.translation();
+
+    entry.body.setBodyType(savedType, true);
+    entry.body.setTranslation({ x: t.x, y: t.y, z: t.z }, true);
+    entry.body.setLinvel(
+      { x: velocity.x * 0.4, y: velocity.y * 0.4, z: velocity.z * 0.4 },
+      true,
+    );
+
+    this.drag = null;
     if (!this.lmbDown) this.canvas.style.cursor = this.hovered ? 'grab' : 'default';
   }
 
@@ -340,7 +347,7 @@ export class ObjectInteraction {
       this.setHighlight(this.hovered.mesh, false);
     }
     this.hovered = entry;
-    if (entry && entry !== this.grab?.entry) {
+    if (entry && entry !== this.drag?.entry) {
       this.setHighlight(entry.mesh, true);
     }
   }
@@ -358,19 +365,13 @@ export class ObjectInteraction {
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
     this.updateBasis();
+    this.camPos.addScaledVector(this.forward, -e.deltaY * 0.01 * SCROLL_SPEED);
 
-    if (this.grab && this.lmbDown) {
-      this.grab.holdDistance = THREE.MathUtils.clamp(
-        this.grab.holdDistance - e.deltaY * 0.012,
-        GRAB_DIST_MIN,
-        GRAB_DIST_MAX,
-      );
-      return;
+    if (this.drag && this.lmbDown) {
+      const pos = this.drag.lastPos.clone().addScaledVector(this.forward, -e.deltaY * 0.01 * SCROLL_SPEED);
+      this.setDragPosition(pos);
     }
 
-    if (this.rmbDown) {
-      this.camPos.addScaledVector(this.forward, -e.deltaY * 0.01 * SCROLL_SPEED);
-      this.applyCamera();
-    }
+    this.applyCamera();
   };
 }
