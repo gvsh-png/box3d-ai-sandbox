@@ -18,6 +18,7 @@ type LogEntry = { role: 'user' | 'assistant' | 'error'; text: string };
 
 export default function App() {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const logPanelRef = useRef<HTMLElement>(null);
   const worldRef = useRef<SandboxWorld | null>(null);
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -45,6 +46,12 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const panel = logPanelRef.current;
+    if (!panel) return;
+    panel.scrollTo({ top: panel.scrollHeight, behavior: 'smooth' });
+  }, [logs, loading]);
+
   const handleSubmit = async (prompt: string) => {
     if (!prompt.trim() || !worldRef.current?.isReady()) return;
 
@@ -52,17 +59,16 @@ export default function App() {
     setLoading(true);
 
     try {
-      const sceneSummary = worldRef.current.getSceneSummary();
+      const local = localParse(prompt);
       let batch;
 
-      if (apiKey.trim()) {
+      if (local) {
+        batch = local;
+      } else if (apiKey.trim()) {
+        const sceneSummary = worldRef.current.getSceneSummary();
         batch = await parsePromptWithAI(apiKey.trim(), model, prompt, sceneSummary);
       } else {
-        const local = localParse(prompt);
-        if (!local) {
-          throw new Error('No API key set. Open settings (+) and add your OpenRouter key, or try a simple phrase like "4 boxes from the sky".');
-        }
-        batch = local;
+        throw new Error('No API key set. Open settings (+) and add your OpenRouter key, or try a simple phrase like "4 boxes from the sky".');
       }
 
       const msg = worldRef.current.executeBatch(batch);
@@ -106,7 +112,7 @@ export default function App() {
 
       <div className="viewport" ref={viewportRef} />
 
-      <aside className="log-panel">
+      <aside className="log-panel" ref={logPanelRef}>
         {logs.map((entry, i) => (
           <div key={i} className={`log-entry ${entry.role}`}>
             {entry.text}

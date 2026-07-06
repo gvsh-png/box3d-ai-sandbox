@@ -64,26 +64,6 @@ export type CommandBatch = {
   message?: string;
 };
 
-export const COMMAND_SCHEMA = `
-You translate natural language into Box3D physics simulation commands.
-Respond ONLY with valid JSON matching this schema:
-{
-  "message": "short friendly confirmation",
-  "commands": [
-    { "action": "spawn", "shape": "box"|"sphere"|"capsule", "position": {"x":0,"y":0,"z":0},
-      "size": {"x":1,"y":1,"z":1}, "radius": 0.5, "color": "#hex",
-      "velocity": {"x":0,"y":0,"z":0}, "fromSky": true, "count": 4, "density": 1 },
-    { "action": "spawnGround", "size": {"x":20,"y":1,"z":20}, "position": {"x":0,"y":-0.5,"z":0} },
-    { "action": "setGravity", "gravity": {"x":0,"y":-10,"z":0} },
-    { "action": "clear" },
-    { "action": "pause", "paused": true },
-    { "action": "explode", "position": {"x":0,"y":2,"z":0}, "radius": 5, "strength": 20 }
-  ]
-}
-Rules:
-- Y is up. Ground is around y=0. Sky spawns use high y (8-15) with fromSky:true.
-- "boxes from the sky" => spawn multiple boxes with fromSky:true, count as requested.
-- Default ground exists; spawnGround only if user asks for floor/ground changes.
-- Use meters. Typical box half-size 0.5-1. Colors as hex strings.
-- Keep commands minimal. No markdown, no code fences, only JSON.
-`.trim();
+export const COMMAND_SCHEMA = `Translate user requests into Box3D physics JSON only. Y is up. Ground at y=0.
+{"message":"short reply","commands":[{"action":"spawn","shape":"box|sphere|capsule","position":{"x":0,"y":0,"z":0},"size":{"x":1,"y":1,"z":1},"fromSky":true,"count":4,"color":"#hex"},{"action":"setGravity","gravity":{"x":0,"y":-10,"z":0}},{"action":"clear"},{"action":"pause","paused":true},{"action":"explode","position":{"x":0,"y":2,"z":0},"radius":5,"strength":20}]}
+Sky spawns: fromSky:true, high y, use count. No markdown.`;
