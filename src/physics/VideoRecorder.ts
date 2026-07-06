@@ -1,8 +1,9 @@
+import type { VideoQualityProfile } from '../lib/recordingPrefs';
+
 export type VideoRecorderState = 'idle' | 'recording' | 'processing';
 
 export type VideoRecorderOptions = {
-  fps?: number;
-  bitrate?: number;
+  profile?: VideoQualityProfile;
   onRecordingStart?: () => void;
   onRecordingStop?: () => void;
 };
@@ -25,23 +26,27 @@ export class VideoRecorder {
     if (this.state === 'recording') return;
 
     this.opts = opts;
-    const fps = opts.fps ?? 24;
+    const profile = opts.profile ?? {
+      fps: 30,
+      bitrate: 12_000_000,
+      maxPixelRatio: 2,
+      codecPreference: ['vp9', 'vp8'] as const,
+    };
+
     this.chunks = [];
-    this.stream = canvas.captureStream(fps);
+    this.stream = canvas.captureStream(profile.fps);
 
-    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
-      ? 'video/webm;codecs=vp8'
-      : MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-        ? 'video/webm;codecs=vp9'
-        : 'video/webm';
-
-    const bitrate = opts.bitrate ?? 4_000_000;
-    this.recorder = new MediaRecorder(this.stream, { mimeType: mime, videoBitsPerSecond: bitrate });
+    const mime = pickMimeType(profile.codecPreference);
+    this.recorder = new MediaRecorder(this.stream, {
+      mimeType: mime,
+      videoBitsPerSecond: profile.bitrate,
+    });
     this.recorder.ondataavailable = (e) => {
       if (e.data.size > 0) this.chunks.push(e.data);
     };
 
-    this.recorder.start(1000);
+    // Smaller timeslices → better seeking and fewer compression artifacts
+    this.recorder.start(250);
     this.startedAt = performance.now();
     this.state = 'recording';
     this.opts.onRecordingStart?.();
@@ -81,4 +86,12 @@ export class VideoRecorder {
     a.click();
     URL.revokeObjectURL(url);
   }
+}
+
+function pickMimeType(preferred: ('vp9' | 'vp8')[]): string {
+  for (const codec of preferred) {
+    const mime = `video/webm;codecs=${codec}`;
+    if (MediaRecorder.isTypeSupported(mime)) return mime;
+  }
+  return 'video/webm';
 }

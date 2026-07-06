@@ -5,6 +5,7 @@ import { AgentSystem, type AgentAction, type AgentDef, type AgentWorldBridge } f
 import { CinematicCamera } from './CinematicCamera';
 import { ReplayRecorder, type ReplayFrame } from './ReplayRecorder';
 import { VideoRecorder } from './VideoRecorder';
+import { getVideoQuality, getVideoQualityProfile } from '../lib/recordingPrefs';
 import { colliderFromGeometry } from './colliderUtils';
 import { resolveAxis } from './scriptArgs';
 import type { PhysicsOpts } from './WorldRuntime';
@@ -84,7 +85,7 @@ export class SandboxWorld {
     this.camera.position.set(8, 6, 12);
     this.camera.lookAt(0, 2, 0);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.shadowMap.enabled = true;
@@ -157,17 +158,21 @@ export class SandboxWorld {
     this.replayPhysicsPaused = false;
   }
 
-  startVideoRecording(): void {
+  startVideoRecording(quality = getVideoQuality()): void {
     if (this.video.isRecording) return;
     const savedRatio = this.renderer.getPixelRatio();
+    const profile = getVideoQualityProfile(quality, this.renderer.domElement);
+    const recordRatio = Math.min(savedRatio, profile.maxPixelRatio, window.devicePixelRatio);
+
     this.video.start(this.renderer.domElement, {
-      fps: 24,
-      bitrate: 4_000_000,
+      profile,
       onRecordingStart: () => {
-        this.renderer.setPixelRatio(Math.min(savedRatio, 1));
+        this.renderer.setPixelRatio(recordRatio);
+        this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
       },
       onRecordingStop: () => {
         this.renderer.setPixelRatio(savedRatio);
+        this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
       },
     });
   }

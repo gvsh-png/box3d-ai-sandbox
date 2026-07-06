@@ -14,7 +14,7 @@ import {
   type ModelId,
 } from './lib/openrouter';
 import { normalizeBatch } from './lib/normalize';
-import { getAutoRecordVideo, setAutoRecordVideo } from './lib/recordingPrefs';
+import { getAutoRecordVideo, getVideoQuality, setAutoRecordVideo, setVideoQuality, type VideoQuality } from './lib/recordingPrefs';
 import { ChatBar } from './components/ChatBar';
 import { SettingsPanel } from './components/SettingsPanel';
 import { StudioToolbar } from './components/StudioToolbar';
@@ -38,6 +38,7 @@ export default function App() {
   const [recordingReplay, setRecordingReplay] = useState(false);
   const [recordingVideo, setRecordingVideo] = useState(false);
   const [autoRecordVideo, setAutoRecordVideoState] = useState(getAutoRecordVideo);
+  const [videoQuality, setVideoQualityState] = useState<VideoQuality>(getVideoQuality);
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       role: 'assistant',
@@ -152,13 +153,15 @@ export default function App() {
     }
   };
 
-  const saveSettings = (key: string, selectedModel: ModelId, autoRecord: boolean) => {
+  const saveSettings = (key: string, selectedModel: ModelId, autoRecord: boolean, quality: VideoQuality) => {
     setApiKey(key);
     setModel(selectedModel);
     setAutoRecordVideoState(autoRecord);
+    setVideoQualityState(quality);
     setStoredApiKey(key);
     setStoredModel(selectedModel);
     setAutoRecordVideo(autoRecord);
+    setVideoQuality(quality);
     setShowSettings(false);
     setLogs((prev) => [
       ...prev,
@@ -219,6 +222,7 @@ export default function App() {
           apiKey={apiKey}
           model={model}
           autoRecordVideo={autoRecordVideo}
+          videoQuality={videoQuality}
           onSave={saveSettings}
           onClose={() => setShowSettings(false)}
         />

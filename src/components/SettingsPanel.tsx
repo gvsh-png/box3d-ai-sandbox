@@ -1,19 +1,22 @@
 import { useState } from 'react';
 import { MODELS, type ModelId } from '../lib/openrouter';
+import type { VideoQuality } from '../lib/recordingPrefs';
 import './SettingsPanel.css';
 
 type Props = {
   apiKey: string;
   model: ModelId;
   autoRecordVideo: boolean;
-  onSave: (apiKey: string, model: ModelId, autoRecordVideo: boolean) => void;
+  videoQuality: VideoQuality;
+  onSave: (apiKey: string, model: ModelId, autoRecordVideo: boolean, videoQuality: VideoQuality) => void;
   onClose: () => void;
 };
 
-export function SettingsPanel({ apiKey, model, autoRecordVideo, onSave, onClose }: Props) {
+export function SettingsPanel({ apiKey, model, autoRecordVideo, videoQuality, onSave, onClose }: Props) {
   const [key, setKey] = useState(apiKey);
   const [selectedModel, setSelectedModel] = useState(model);
   const [autoRecord, setAutoRecord] = useState(autoRecordVideo);
+  const [quality, setQuality] = useState<VideoQuality>(videoQuality);
 
   return (
     <div className="settings-overlay" onClick={onClose}>
@@ -46,6 +49,14 @@ export function SettingsPanel({ apiKey, model, autoRecordVideo, onSave, onClose 
           </select>
         </label>
 
+        <label className="field">
+          <span>Video quality</span>
+          <select value={quality} onChange={(e) => setQuality(e.target.value as VideoQuality)}>
+            <option value="high">High (VP9, 30fps, sharp)</option>
+            <option value="balanced">Balanced (lighter on GPU)</option>
+          </select>
+        </label>
+
         <label className="field checkbox-field">
           <input
             type="checkbox"
@@ -59,7 +70,7 @@ export function SettingsPanel({ apiKey, model, autoRecordVideo, onSave, onClose 
           <button type="button" className="btn secondary" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="btn primary" onClick={() => onSave(key.trim(), selectedModel, autoRecord)}>
+          <button type="button" className="btn primary" onClick={() => onSave(key.trim(), selectedModel, autoRecord, quality)}>
             Save
           </button>
         </div>
