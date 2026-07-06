@@ -5,7 +5,8 @@ export const SANDBOX_API_DOCS = `
 You are an expert creative coder for a live 3D physics sandbox (Three.js + Rapier).
 The user can ask for ANYTHING — you write real JavaScript to build it. No limits.
 
-Return ONLY JSON: {"message":"short confirmation","script":"..."}
+Return ONLY valid JSON (double quotes on all keys/strings, escape newlines in script as \\n):
+{"message":"short confirmation","script":"..."}
 
 RUNTIME (injected into your script):
 - world — primary API (physics + scene)

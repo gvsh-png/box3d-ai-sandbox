@@ -1,6 +1,7 @@
 import { SANDBOX_API_DOCS, type ScriptResponse } from '../types/script';
 import type { CommandBatch } from '../types/commands';
 import { buildScriptMessages, type ConversationTurn } from './conversation';
+import { parseJsonLenient } from './parseModelJson';
 
 export const MODELS = [
   { id: 'deepseek/deepseek-v4-flash:nitro', label: 'DeepSeek V4 Flash (fastest)' },
@@ -73,7 +74,28 @@ export async function generateScriptWithAI(
 
   if (!content) throw new Error('Empty response from model — try rephrasing or a different model.');
 
-  return parseScriptResponse(content);
+  try {
+    return parseScriptResponse(content);
+  } catch (firstErr) {
+    // One retry with explicit JSON reminder
+    const retryMessages: ChatMessage[] = [
+      ...messages,
+      {
+        role: 'user',
+        content:
+          'Your last reply was not valid JSON. Return ONLY this exact shape with no markdown:\n{"message":"short text","script":"javascript here"}',
+      },
+    ];
+    try {
+      const retryRes = await openRouterFetch(apiKey, { ...body, messages: retryMessages });
+      const retryData = await retryRes.json();
+      const retryContent = extractContent(retryData);
+      if (retryContent) return parseScriptResponse(retryContent);
+    } catch {
+      /* fall through */
+    }
+    throw firstErr;
+  }
 }
 
 function openRouterFetch(apiKey: string, body: object): Promise<Response> {
@@ -106,11 +128,7 @@ function extractContent(data: {
 }
 
 export function parseScriptResponse(raw: string): ScriptResponse {
-  const cleaned = raw.replace(/```json\n?|\n?```/g, '').trim();
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  const jsonStr = start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned;
-  const parsed = JSON.parse(jsonStr) as ScriptResponse & { commands?: unknown };
+  const parsed = parseJsonLenient<ScriptResponse & { commands?: unknown }>(raw);
 
   if (typeof parsed.script === 'string' && parsed.script.trim()) {
     return {

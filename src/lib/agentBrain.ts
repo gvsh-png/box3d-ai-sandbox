@@ -1,4 +1,5 @@
 import type { AgentAction, AgentContext, AgentDef } from '../physics/AgentSystem';
+import { parseJsonLenient } from './parseModelJson';
 
 const ACTION_SCHEMA = `Return ONLY JSON: {"force":{"x":0,"y":0,"z":0},"impulse":{"x":0,"y":0,"z":0},"steer":0}
 Use force/impulse to move. steer is yaw torque (-1 to 1). Keep actions small.`;
@@ -45,8 +46,7 @@ ${ACTION_SCHEMA}`;
   if (!raw) return;
 
   try {
-    const parsed = JSON.parse(raw) as AgentAction;
-    return parsed;
+    return parseJsonLenient<AgentAction>(raw);
   } catch {
     return;
   }
