@@ -1,4 +1,5 @@
 import type { SandboxWorld } from '../physics/SandboxWorld';
+import { downloadVideo } from '../physics/OfflineVideoExporter';
 import { VideoRecorder } from '../physics/VideoRecorder';
 import './StudioToolbar.css';
 
@@ -7,10 +8,14 @@ type Props = {
   ready: boolean;
   recordingReplay: boolean;
   recordingVideo: boolean;
+  exportingVideo: boolean;
+  exportProgress: number;
   autoRecordVideo: boolean;
+  videoQuality: import('../lib/recordingPrefs').VideoQuality;
   onReplayRecordingChange: (on: boolean) => void;
   onVideoRecordingChange: (on: boolean) => void;
   onAutoRecordChange: (on: boolean) => void;
+  onExportStateChange: (state: { exporting: boolean; progress: number }) => void;
   onStatus: (msg: string) => void;
 };
 
@@ -19,23 +24,38 @@ export function StudioToolbar({
   ready,
   recordingReplay,
   recordingVideo,
+  exportingVideo,
+  exportProgress,
   autoRecordVideo,
+  videoQuality,
   onReplayRecordingChange,
   onVideoRecordingChange,
   onAutoRecordChange,
+  onExportStateChange,
   onStatus,
 }: Props) {
   if (!ready || !world) return null;
 
   const finishVideo = async () => {
-    if (!recordingVideo) return;
-    const blob = await world.stopVideoRecording();
-    onVideoRecordingChange(false);
-    if (blob) {
-      VideoRecorder.download(blob);
-      onStatus(`Video saved (${(blob.size / 1024 / 1024).toFixed(1)} MB)`);
-    } else {
-      onStatus('Video recording failed');
+    if (!recordingVideo || !world) return;
+    onExportStateChange({ exporting: true, progress: 0 });
+    onStatus('Rendering 60fps MP4 offline — sim had zero encode lag during capture.');
+    try {
+      const result = await world.stopVideoRecording(videoQuality, (p) => {
+        onExportStateChange({ exporting: true, progress: p.progress });
+      });
+      onVideoRecordingChange(false);
+      if (result) {
+        downloadVideo(result.blob, result.filename);
+        onStatus(`Video saved: ${result.filename} (${(result.blob.size / 1024 / 1024).toFixed(1)} MB, 60fps)`);
+      } else {
+        onStatus('Video export failed');
+      }
+    } catch (err) {
+      onVideoRecordingChange(false);
+      onStatus(err instanceof Error ? err.message : 'Video export failed');
+    } finally {
+      onExportStateChange({ exporting: false, progress: 0 });
     }
   };
 
@@ -57,7 +77,7 @@ export function StudioToolbar({
     if (recordingVideo) return;
     world.startVideoRecording();
     onVideoRecordingChange(true);
-    onStatus('Recording video… click Finish Video when done.');
+    onStatus('Capturing poses (no lag)… click Finish Video for 60fps MP4.');
   };
 
   const playReplay = () => {
@@ -103,11 +123,17 @@ export function StudioToolbar({
   return (
     <div className="studio-toolbar">
       {recordingVideo ? (
-        <button type="button" className="finish-video active" onClick={() => void finishVideo()} title="Stop and download video">
-          ✓ Finish Video
+        <button
+          type="button"
+          className="finish-video active"
+          onClick={() => void finishVideo()}
+          disabled={exportingVideo}
+          title="Render and download 60fps MP4"
+        >
+          {exportingVideo ? `Rendering ${Math.round(exportProgress * 100)}%` : '✓ Finish Video'}
         </button>
       ) : (
-        <button type="button" onClick={startManualVideo} title="Record WebM video">
+        <button type="button" onClick={startManualVideo} title="Capture poses while sim runs — export 60fps MP4 when done">
           🎬 Video
         </button>
       )}

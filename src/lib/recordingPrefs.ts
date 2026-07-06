@@ -23,27 +23,28 @@ export function setVideoQuality(quality: VideoQuality): void {
 }
 
 export type VideoQualityProfile = {
-  fps: number;
+  /** Frames captured during live sim (lightweight pose data). */
+  captureFps: number;
+  /** Frames in exported video (offline render). */
+  exportFps: number;
   bitrate: number;
-  maxPixelRatio: number;
-  codecPreference: ('vp9' | 'vp8')[];
+  exportPixelRatio: number;
 };
 
 export function getVideoQualityProfile(quality: VideoQuality, canvas: HTMLCanvasElement): VideoQualityProfile {
   const pixels = canvas.width * canvas.height;
   if (quality === 'balanced') {
     return {
-      fps: 24,
-      bitrate: Math.min(8_000_000, Math.max(4_000_000, Math.round(pixels * 4))),
-      maxPixelRatio: 1.25,
-      codecPreference: ['vp9', 'vp8'],
+      captureFps: 30,
+      exportFps: 60,
+      bitrate: Math.min(12_000_000, Math.max(6_000_000, Math.round(pixels * 5))),
+      exportPixelRatio: 1.5,
     };
   }
-  // High — ~0.12 bits per pixel per frame at 30fps target
   return {
-    fps: 30,
-    bitrate: Math.min(20_000_000, Math.max(10_000_000, Math.round(pixels * 8))),
-    maxPixelRatio: 2,
-    codecPreference: ['vp9', 'vp8'],
+    captureFps: 60,
+    exportFps: 60,
+    bitrate: Math.min(24_000_000, Math.max(12_000_000, Math.round(pixels * 10))),
+    exportPixelRatio: 2,
   };
 }

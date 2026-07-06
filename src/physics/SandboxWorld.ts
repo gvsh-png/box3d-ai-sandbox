@@ -4,7 +4,8 @@ import { ObjectInteraction } from './ObjectInteraction';
 import { AgentSystem, type AgentAction, type AgentDef, type AgentWorldBridge } from './AgentSystem';
 import { CinematicCamera } from './CinematicCamera';
 import { ReplayRecorder, type ReplayFrame } from './ReplayRecorder';
-import { VideoRecorder } from './VideoRecorder';
+import { exportReplayToVideo } from './OfflineVideoExporter';
+import { interpolateFrames } from '../lib/replayUtils';
 import { getVideoQuality, getVideoQualityProfile } from '../lib/recordingPrefs';
 import { colliderFromGeometry } from './colliderUtils';
 import { resolveAxis } from './scriptArgs';
@@ -68,8 +69,10 @@ export class SandboxWorld {
   private lastTickTime = performance.now();
 
   readonly replay = new ReplayRecorder();
-  readonly video = new VideoRecorder();
+  readonly videoCapture = new ReplayRecorder();
   readonly cinematic = new CinematicCamera();
+  private videoSessionActive = false;
+  private exportingVideo = false;
   private agents = new AgentSystem();
   private replayPhysicsPaused = false;
 
@@ -123,6 +126,18 @@ export class SandboxWorld {
     return `${this.bodies.length} bodies (${dynamic} dynamic), gravity (${gravity.x}, ${gravity.y}, ${gravity.z}), ids: [${ids}], agents: ${this.agents.count()}, scriptTick: ${!!this.scriptTick}, camera: ${this.cinematic.mode}`;
   }
 
+  isVideoRecording(): boolean {
+    return this.videoSessionActive;
+  }
+
+  isExportingVideo(): boolean {
+    return this.exportingVideo;
+  }
+
+  get containerSize(): { width: number; height: number } {
+    return { width: this.container.clientWidth, height: this.container.clientHeight };
+  }
+
   getAgentCount(): number {
     return this.agents.count();
   }
@@ -171,26 +186,61 @@ export class SandboxWorld {
   }
 
   startVideoRecording(quality = getVideoQuality()): void {
-    if (this.video.isRecording) return;
-    const savedRatio = this.renderer.getPixelRatio();
+    if (this.videoSessionActive) return;
     const profile = getVideoQualityProfile(quality, this.renderer.domElement);
-    const recordRatio = Math.min(savedRatio, profile.maxPixelRatio, window.devicePixelRatio);
-
-    this.video.start(this.renderer.domElement, {
-      profile,
-      onRecordingStart: () => {
-        this.renderer.setPixelRatio(recordRatio);
-        this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
-      },
-      onRecordingStop: () => {
-        this.renderer.setPixelRatio(savedRatio);
-        this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
-      },
-    });
+    this.videoCapture.setCaptureFps(profile.captureFps);
+    this.videoCapture.start();
+    this.videoSessionActive = true;
   }
 
-  async stopVideoRecording(): Promise<Blob | null> {
-    return this.video.stop();
+  async stopVideoRecording(quality = getVideoQuality(), onProgress?: (p: { phase: string; progress: number }) => void) {
+    if (!this.videoSessionActive) return null;
+    this.videoSessionActive = false;
+    const data = this.videoCapture.stop();
+    this.exportingVideo = true;
+    try {
+      return await exportReplayToVideo(this, data, quality, onProgress);
+    } finally {
+      this.exportingVideo = false;
+    }
+  }
+
+  applyReplayFrame(frame: ReplayFrame): void {
+    for (const [id, state] of Object.entries(frame.bodies)) {
+      const entry = this.bodyById.get(id);
+      if (!entry) continue;
+      entry.mesh.position.set(state.p[0], state.p[1], state.p[2]);
+      entry.mesh.quaternion.set(state.q[0], state.q[1], state.q[2], state.q[3]);
+    }
+    this.camera.position.set(frame.camera.p[0], frame.camera.p[1], frame.camera.p[2]);
+    this.cinematic.lookAt(frame.camera.target[0], frame.camera.target[1], frame.camera.target[2]);
+    this.camera.lookAt(this.cinematic.getLookTarget());
+  }
+
+  getBodySnapshots(): Array<{ id: string; p: [number, number, number]; q: [number, number, number, number] }> {
+    return this.bodies.map((entry) => ({
+      id: entry.id,
+      p: [entry.mesh.position.x, entry.mesh.position.y, entry.mesh.position.z],
+      q: [
+        entry.mesh.quaternion.x,
+        entry.mesh.quaternion.y,
+        entry.mesh.quaternion.z,
+        entry.mesh.quaternion.w,
+      ],
+    }));
+  }
+
+  restoreBodySnapshots(
+    snaps: Array<{ id: string; p: [number, number, number]; q: [number, number, number, number] }>,
+  ): void {
+    for (const snap of snaps) {
+      const entry = this.bodyById.get(snap.id);
+      if (!entry) continue;
+      entry.mesh.position.set(snap.p[0], snap.p[1], snap.p[2]);
+      entry.mesh.quaternion.set(snap.q[0], snap.q[1], snap.q[2], snap.q[3]);
+      entry.body.setTranslation({ x: snap.p[0], y: snap.p[1], z: snap.p[2] }, true);
+      entry.body.setRotation({ x: snap.q[0], y: snap.q[1], z: snap.q[2], w: snap.q[3] }, true);
+    }
   }
 
   getBodyPosition(id: string): THREE.Vector3 | null {
@@ -346,7 +396,7 @@ export class SandboxWorld {
   dispose(): void {
     cancelAnimationFrame(this.animationId);
     if (this.replay.recording) this.replay.stop();
-    if (this.video.isRecording) void this.video.stop();
+    if (this.videoSessionActive) this.videoCapture.stop();
     window.removeEventListener('resize', this.onResize);
     this.interaction?.dispose();
     this.interaction = null;
@@ -447,6 +497,17 @@ export class SandboxWorld {
       this.replay.capture(now, snapshot, this.camera, this.cinematic.getLookTarget());
     }
 
+    if (this.videoSessionActive) {
+      const snapshot = new Map<string, { position: THREE.Vector3; quaternion: THREE.Quaternion }>();
+      for (const entry of this.bodies) {
+        snapshot.set(entry.id, {
+          position: entry.mesh.position.clone(),
+          quaternion: entry.mesh.quaternion.clone(),
+        });
+      }
+      this.videoCapture.capture(now, snapshot, this.camera, this.cinematic.getLookTarget());
+    }
+
     this.renderer.render(this.scene, this.camera);
   };
 
@@ -466,31 +527,7 @@ export class SandboxWorld {
   }
 
   private interpolateFrames(a: ReplayFrame, b: ReplayFrame, alpha: number): ReplayFrame {
-    const bodies: ReplayFrame['bodies'] = {};
-    for (const id of new Set([...Object.keys(a.bodies), ...Object.keys(b.bodies)])) {
-      const sa = a.bodies[id];
-      const sb = b.bodies[id];
-      if (!sa || !sb) {
-        bodies[id] = sa ?? sb!;
-        continue;
-      }
-      bodies[id] = {
-        p: sa.p.map((v, i) => v + (sb.p[i] - v) * alpha) as [number, number, number],
-        q: sa.q.map((v, i) => v + (sb.q[i] - v) * alpha) as [number, number, number, number],
-      };
-    }
-    return {
-      t: a.t + (b.t - a.t) * alpha,
-      bodies,
-      camera: {
-        p: a.camera.p.map((v, i) => v + (b.camera.p[i] - v) * alpha) as [number, number, number],
-        target: a.camera.target.map((v, i) => v + (b.camera.target[i] - v) * alpha) as [
-          number,
-          number,
-          number,
-        ],
-      },
-    };
+    return interpolateFrames(a, b, alpha);
   }
 
   private makeAgentBridge(): AgentWorldBridge {

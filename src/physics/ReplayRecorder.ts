@@ -23,14 +23,19 @@ export type ReplayData = {
 export class ReplayRecorder {
   private frames: ReplayFrame[] = [];
   private startTime = 0;
-  private interval = 1 / 30;
+  private interval = 1 / 60;
   private lastCapture = 0;
 
   recording = false;
   playing = false;
   playTime = 0;
   playIndex = 0;
-  maxFrames = 1800;
+  maxFrames = 7200;
+
+  setCaptureFps(fps: number): void {
+    this.interval = 1 / fps;
+    this.maxFrames = fps * 120;
+  }
 
   start(): void {
     this.frames = [];

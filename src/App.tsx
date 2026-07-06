@@ -39,10 +39,12 @@ export default function App() {
   const [recordingVideo, setRecordingVideo] = useState(false);
   const [autoRecordVideo, setAutoRecordVideoState] = useState(getAutoRecordVideo);
   const [videoQuality, setVideoQualityState] = useState<VideoQuality>(getVideoQuality);
+  const [exportingVideo, setExportingVideo] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       role: 'assistant',
-      text: 'Studio mode: build scenes with chat · record Replay (JSON) or Video (WebM) · agents & cinematic camera in scripts',
+      text: 'Studio: chat to build scenes · Video captures poses (no lag) → Finish Video exports 60fps MP4',
     },
     {
       role: 'assistant',
@@ -93,10 +95,10 @@ export default function App() {
 
   const startAutoVideo = () => {
     const world = worldRef.current;
-    if (!world || world.video.isRecording) return;
-    world.startVideoRecording();
+    if (!world || world.isVideoRecording()) return;
+    world.startVideoRecording(videoQuality);
     setRecordingVideo(true);
-    pushStatus('Auto-recording video… click Finish Video when done.');
+    pushStatus('Capturing for video (zero lag)… click Finish Video when done.');
   };
 
   const handleSubmit = async (prompt: string) => {
@@ -189,6 +191,7 @@ export default function App() {
             <span className="badge ok">{sandbox.getAgentCount()} agents</span>
           )}
           {(recordingReplay || recordingVideo) && <span className="badge rec">REC</span>}
+          {exportingVideo && <span className="badge rec">RENDER</span>}
         </div>
       </header>
 
@@ -199,12 +202,19 @@ export default function App() {
         ready={ready}
         recordingReplay={recordingReplay}
         recordingVideo={recordingVideo}
+        exportingVideo={exportingVideo}
+        exportProgress={exportProgress}
         autoRecordVideo={autoRecordVideo}
+        videoQuality={videoQuality}
         onReplayRecordingChange={setRecordingReplay}
         onVideoRecordingChange={setRecordingVideo}
         onAutoRecordChange={(on) => {
           setAutoRecordVideoState(on);
           setAutoRecordVideo(on);
+        }}
+        onExportStateChange={({ exporting, progress }) => {
+          setExportingVideo(exporting);
+          setExportProgress(progress);
         }}
         onStatus={pushStatus}
       />

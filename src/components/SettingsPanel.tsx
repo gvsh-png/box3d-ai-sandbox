@@ -52,8 +52,8 @@ export function SettingsPanel({ apiKey, model, autoRecordVideo, videoQuality, on
         <label className="field">
           <span>Video quality</span>
           <select value={quality} onChange={(e) => setQuality(e.target.value as VideoQuality)}>
-            <option value="high">High (VP9, 30fps, sharp)</option>
-            <option value="balanced">Balanced (lighter on GPU)</option>
+            <option value="high">High (60fps MP4, full res)</option>
+            <option value="balanced">Balanced (60fps, lighter export)</option>
           </select>
         </label>
 
