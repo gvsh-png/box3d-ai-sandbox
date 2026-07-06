@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ObjectInteraction } from './ObjectInteraction';
+import { AgentSystem, type AgentAction, type AgentDef, type AgentWorldBridge } from './AgentSystem';
+import { CinematicCamera } from './CinematicCamera';
+import { ReplayRecorder, type ReplayFrame } from './ReplayRecorder';
+import { VideoRecorder } from './VideoRecorder';
 import { colliderFromGeometry } from './colliderUtils';
 import { resolveAxis } from './scriptArgs';
 import type { PhysicsOpts } from './WorldRuntime';
@@ -62,6 +66,12 @@ export class SandboxWorld {
   private scriptTick: ((dt: number) => void) | null = null;
   private lastTickTime = performance.now();
 
+  readonly replay = new ReplayRecorder();
+  readonly video = new VideoRecorder();
+  readonly cinematic = new CinematicCamera();
+  private agents = new AgentSystem();
+  private replayPhysicsPaused = false;
+
   constructor(container: HTMLElement) {
     this.container = container;
 
@@ -96,6 +106,7 @@ export class SandboxWorld {
       () => this.bodies,
     );
     this.ready = true;
+    this.setupReplayApply();
     this.tick();
   }
 
@@ -107,12 +118,67 @@ export class SandboxWorld {
     const dynamic = this.bodies.filter((b) => b.body.isDynamic()).length;
     const gravity = this.world?.gravity ?? { x: 0, y: -10, z: 0 };
     const ids = [...this.bodyById.keys()].slice(0, 12).join(', ');
-    return `${this.bodies.length} bodies (${dynamic} dynamic), gravity (${gravity.x}, ${gravity.y}, ${gravity.z}), ids: [${ids}], scriptTick: ${!!this.scriptTick}`;
+    return `${this.bodies.length} bodies (${dynamic} dynamic), gravity (${gravity.x}, ${gravity.y}, ${gravity.z}), ids: [${ids}], agents: ${this.agents.count()}, scriptTick: ${!!this.scriptTick}, camera: ${this.cinematic.mode}`;
+  }
+
+  getAgentCount(): number {
+    return this.agents.count();
+  }
+
+  setLLMAgentHandler(handler: AgentSystem['llmHandler']): void {
+    this.agents.llmHandler = handler;
+  }
+
+  registerAgent(def: AgentDef): void {
+    this.agents.register(def);
+  }
+
+  startReplayRecording(): void {
+    this.replay.start();
+  }
+
+  stopReplayRecording(): string {
+    return this.replay.exportJson();
+  }
+
+  loadReplay(json: string): void {
+    const data = ReplayRecorder.importJson(json);
+    this.replay.load(data);
+    this.setupReplayApply();
+  }
+
+  playReplay(): void {
+    this.replayPhysicsPaused = true;
+    this.replay.startPlayback();
+  }
+
+  stopReplay(): void {
+    this.replay.stopPlayback();
+    this.replayPhysicsPaused = false;
+  }
+
+  startVideoRecording(): void {
+    this.video.start(this.renderer.domElement);
+  }
+
+  async stopVideoRecording(): Promise<Blob | null> {
+    return this.video.stop();
+  }
+
+  getBodyPosition(id: string): THREE.Vector3 | null {
+    const entry = this.bodyById.get(id);
+    if (!entry) return null;
+    const t = entry.body.translation();
+    return new THREE.Vector3(t.x, t.y, t.z);
   }
 
   /** Called by WorldRuntime — clears spawned bodies, keeps ground. */
   clearSpawned(): void {
     this.clearScriptState();
+    this.agents.clear();
+    this.cinematic.free();
+    this.replayPhysicsPaused = false;
+    this.replay.stopPlayback();
     for (const entry of [...this.bodies]) {
       this.removeEntry(entry);
     }
@@ -251,6 +317,8 @@ export class SandboxWorld {
 
   dispose(): void {
     cancelAnimationFrame(this.animationId);
+    if (this.replay.recording) this.replay.stop();
+    if (this.video.isRecording) void this.video.stop();
     window.removeEventListener('resize', this.onResize);
     this.interaction?.dispose();
     this.interaction = null;
@@ -292,9 +360,22 @@ export class SandboxWorld {
     const dt = Math.min(0.05, (now - this.lastTickTime) / 1000);
     this.lastTickTime = now;
 
+    this.interaction?.setCinematicOverride(this.cinematic.active);
+
+    if (this.replay.playing) {
+      this.replay.stepPlayback(dt);
+      this.cinematic.update(dt, this.camera, (id) => this.getBodyPosition(id));
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
     this.interaction?.update(dt);
 
-    if (!this.world || this.paused) {
+    void this.agents.tick(dt, this.makeAgentBridge());
+
+    this.cinematic.update(dt, this.camera, (id) => this.getBodyPosition(id));
+
+    if (!this.world || this.paused || this.replayPhysicsPaused) {
       this.renderer.render(this.scene, this.camera);
       return;
     }
@@ -327,8 +408,141 @@ export class SandboxWorld {
       entry.mesh.quaternion.set(r.x, r.y, r.z, r.w);
     }
 
+    if (this.replay.recording) {
+      const snapshot = new Map<string, { position: THREE.Vector3; quaternion: THREE.Quaternion }>();
+      for (const entry of this.bodies) {
+        snapshot.set(entry.id, {
+          position: entry.mesh.position.clone(),
+          quaternion: entry.mesh.quaternion.clone(),
+        });
+      }
+      this.replay.capture(now, snapshot, this.camera, this.cinematic.getLookTarget());
+    }
+
     this.renderer.render(this.scene, this.camera);
   };
+
+  private setupReplayApply(): void {
+    this.replay.onApply = (a, alpha, b) => {
+      const frame = b ? this.interpolateFrames(a, b, alpha) : a;
+      for (const [id, state] of Object.entries(frame.bodies)) {
+        const entry = this.bodyById.get(id);
+        if (!entry) continue;
+        entry.mesh.position.set(state.p[0], state.p[1], state.p[2]);
+        entry.mesh.quaternion.set(state.q[0], state.q[1], state.q[2], state.q[3]);
+      }
+      this.camera.position.set(frame.camera.p[0], frame.camera.p[1], frame.camera.p[2]);
+      this.cinematic.lookAt(frame.camera.target[0], frame.camera.target[1], frame.camera.target[2]);
+      this.camera.lookAt(this.cinematic.getLookTarget());
+    };
+  }
+
+  private interpolateFrames(a: ReplayFrame, b: ReplayFrame, alpha: number): ReplayFrame {
+    const bodies: ReplayFrame['bodies'] = {};
+    for (const id of new Set([...Object.keys(a.bodies), ...Object.keys(b.bodies)])) {
+      const sa = a.bodies[id];
+      const sb = b.bodies[id];
+      if (!sa || !sb) {
+        bodies[id] = sa ?? sb!;
+        continue;
+      }
+      bodies[id] = {
+        p: sa.p.map((v, i) => v + (sb.p[i] - v) * alpha) as [number, number, number],
+        q: sa.q.map((v, i) => v + (sb.q[i] - v) * alpha) as [number, number, number, number],
+      };
+    }
+    return {
+      t: a.t + (b.t - a.t) * alpha,
+      bodies,
+      camera: {
+        p: a.camera.p.map((v, i) => v + (b.camera.p[i] - v) * alpha) as [number, number, number],
+        target: a.camera.target.map((v, i) => v + (b.camera.target[i] - v) * alpha) as [
+          number,
+          number,
+          number,
+        ],
+      },
+    };
+  }
+
+  private makeAgentBridge(): AgentWorldBridge {
+    return {
+      getBodyPosition: (id) => this.getBodyPosition(id),
+      getBodyVelocity: (id) => {
+        const entry = this.bodyById.get(id);
+        if (!entry) return null;
+        const v = entry.body.linvel();
+        return { x: v.x, y: v.y, z: v.z };
+      },
+      getBodyForward: (id) => {
+        const entry = this.bodyById.get(id);
+        if (!entry) return null;
+        const f = new THREE.Vector3(0, 0, 1).applyQuaternion(entry.mesh.quaternion);
+        return { x: f.x, y: f.y, z: f.z };
+      },
+      queryNearest: (origin, count, excludeId) => {
+        const hits: Array<{ id: string; dist: number; position: Vec3 }> = [];
+        for (const entry of this.bodies) {
+          if (entry.id === excludeId) continue;
+          const t = entry.body.translation();
+          const dx = t.x - origin.x;
+          const dy = t.y - origin.y;
+          const dz = t.z - origin.z;
+          hits.push({
+            id: entry.id,
+            dist: Math.sqrt(dx * dx + dy * dy + dz * dz),
+            position: { x: t.x, y: t.y, z: t.z },
+          });
+        }
+        hits.sort((a, b) => a.dist - b.dist);
+        return hits.slice(0, count);
+      },
+      raycast: (origin, dir, maxDist, excludeId) => {
+        if (!this.world) return { hit: false };
+        const len = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z) || 1;
+        const nd = { x: dir.x / len, y: dir.y / len, z: dir.z / len };
+        const ray = new RAPIER.Ray(origin, nd);
+        const hit = this.world.castRay(ray, maxDist, true);
+        if (!hit) return { hit: false };
+        const collider = hit.collider;
+        const body = collider.parent();
+        const entry = this.bodies.find((e) => e.body.handle === body?.handle);
+        if (!entry || entry.id === excludeId) return { hit: false };
+        const point = ray.pointAt(hit.timeOfImpact);
+        return {
+          hit: true,
+          dist: hit.timeOfImpact,
+          point: { x: point.x, y: point.y, z: point.z },
+          bodyId: entry.id,
+        };
+      },
+      applyAction: (bodyId, action) => this.applyAgentAction(bodyId, action),
+    };
+  }
+
+  private applyAgentAction(bodyId: string, action: AgentAction): void {
+    const entry = this.bodyById.get(bodyId);
+    if (!entry || !entry.body.isDynamic()) return;
+
+    if (action.force) {
+      entry.body.applyImpulse(
+        { x: action.force.x * 0.016, y: action.force.y * 0.016, z: action.force.z * 0.016 },
+        true,
+      );
+    }
+    if (action.impulse) {
+      entry.body.applyImpulse(action.impulse, true);
+    }
+    if (action.torque) {
+      entry.body.applyTorqueImpulse(action.torque, true);
+    }
+    if (action.setVelocity) {
+      entry.body.setLinvel(action.setVelocity, true);
+    }
+    if (action.steer) {
+      entry.body.applyTorqueImpulse({ x: 0, y: action.steer * 2, z: 0 }, true);
+    }
+  }
 
   private matProps(material?: MaterialPreset, overrides?: Partial<SpawnBodyCommand>) {
     const base = MATERIALS[material ?? 'default'] ?? MATERIALS.default;

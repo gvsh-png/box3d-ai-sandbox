@@ -1,0 +1,39 @@
+.studio-toolbar {
+  position: absolute;
+  top: 52px;
+  right: 16px;
+  z-index: 8;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: min(420px, calc(100% - 32px));
+  pointer-events: auto;
+}
+
+.studio-toolbar button {
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(16, 16, 22, 0.88);
+  color: #c8c8d0;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+
+.studio-toolbar button:hover {
+  border-color: rgba(126, 184, 255, 0.35);
+  color: #e8eeff;
+}
+
+.studio-toolbar button.active {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #fca5a5;
+  box-shadow: 0 0 12px rgba(248, 113, 113, 0.15);
+}
+
+.studio-divider {
+  width: 1px;
+  background: rgba(255, 255, 255, 0.12);
+  margin: 0 2px;
+}

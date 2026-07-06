@@ -1,5 +1,6 @@
 import { SANDBOX_API_DOCS, type ScriptResponse } from '../types/script';
 import type { CommandBatch } from '../types/commands';
+import { buildScriptMessages, type ConversationTurn } from './conversation';
 
 export const MODELS = [
   { id: 'deepseek/deepseek-v4-flash:nitro', label: 'DeepSeek V4 Flash (fastest)' },
@@ -40,14 +41,14 @@ export async function generateScriptWithAI(
   model: ModelId,
   userPrompt: string,
   sceneSummary: string,
+  history: ConversationTurn[] = [],
 ): Promise<ScriptResponse> {
-  const messages: ChatMessage[] = [
-    { role: 'system', content: SANDBOX_API_DOCS },
-    {
-      role: 'user',
-      content: `Current scene: ${sceneSummary}\n\nUser request: ${userPrompt}`,
-    },
-  ];
+  const messages: ChatMessage[] = buildScriptMessages(
+    SANDBOX_API_DOCS,
+    history,
+    sceneSummary,
+    userPrompt,
+  );
 
   const body = {
     model,

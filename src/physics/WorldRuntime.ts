@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { SandboxWorld } from './SandboxWorld';
+import type { AgentDef, AgentThinkFn } from './AgentSystem';
+import type { CameraKeyframe } from './CinematicCamera';
 import { resolveAxis, resolveBodyId, type AxisArg, type BodyRef } from './scriptArgs';
 import type { Vec3 } from '../types/commands';
 
@@ -32,6 +34,22 @@ export class WorldRuntime {
   readonly Rapier = RAPIER;
 
   private bodies = new Map<string, BodyHandle>();
+
+  readonly camera = {
+    free: () => this.world.cinematic.free(),
+    follow: (body: BodyRef, offset?: Vec3) => {
+      this.world.cinematic.follow(resolveBodyId(body), offset);
+    },
+    orbit: (body: BodyRef, radius = 10, height = 4, speed = 0.35) => {
+      this.world.cinematic.orbit(resolveBodyId(body), radius, height, speed);
+    },
+    path: (keyframes: CameraKeyframe[], loop = false) => {
+      this.world.cinematic.setPath(keyframes, loop);
+    },
+    lookAt: (x: number, y: number, z: number) => {
+      this.world.cinematic.lookAt(x, y, z);
+    },
+  };
 
   constructor(private world: SandboxWorld) {}
 
@@ -134,6 +152,37 @@ export class WorldRuntime {
 
   explode(x: number, y: number, z: number, radius = 6, strength = 25): void {
     this.world.execute({ action: 'explode', position: { x, y, z }, radius, strength });
+  }
+
+  agent(opts: {
+    id: string;
+    body: BodyRef;
+    think?: AgentThinkFn;
+    brain?: 'script' | 'llm';
+    instruction?: string;
+    llmInterval?: number;
+  }): void {
+    const def: AgentDef = {
+      id: opts.id,
+      bodyId: resolveBodyId(opts.body),
+      think: opts.think,
+      brain: opts.brain,
+      instruction: opts.instruction,
+      llmInterval: opts.llmInterval,
+    };
+    this.world.registerAgent(def);
+  }
+
+  recordReplay(start = true): string | void {
+    if (start) {
+      this.world.startReplayRecording();
+      return;
+    }
+    return this.world.stopReplayRecording();
+  }
+
+  startVideoRecording(): void {
+    this.world.startVideoRecording();
   }
 
   private makeHandle(id: string, mesh: THREE.Mesh): BodyHandle {

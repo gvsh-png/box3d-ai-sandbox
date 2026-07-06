@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { SandboxWorld } from './physics/SandboxWorld';
 import { executeSandboxScript } from './lib/executeScript';
+import { thinkWithLLM } from './lib/agentBrain';
+import { appendTurn, type ConversationTurn } from './lib/conversation';
 import {
   getStoredApiKey,
   getStoredModel,
@@ -14,6 +16,7 @@ import {
 import { normalizeBatch } from './lib/normalize';
 import { ChatBar } from './components/ChatBar';
 import { SettingsPanel } from './components/SettingsPanel';
+import { StudioToolbar } from './components/StudioToolbar';
 import './App.css';
 
 type LogEntry = { role: 'user' | 'assistant' | 'error'; text: string };
@@ -22,17 +25,44 @@ export default function App() {
   const viewportRef = useRef<HTMLDivElement>(null);
   const logPanelRef = useRef<HTMLElement>(null);
   const worldRef = useRef<SandboxWorld | null>(null);
+  const [sandbox, setSandbox] = useState<SandboxWorld | null>(null);
+  const apiKeyRef = useRef(getStoredApiKey());
+  const modelRef = useRef<ModelId>(getStoredModel());
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState(getStoredApiKey);
   const [model, setModel] = useState<ModelId>(getStoredModel);
+  const [history, setHistory] = useState<ConversationTurn[]>([]);
+  const [recordingReplay, setRecordingReplay] = useState(false);
+  const [recordingVideo, setRecordingVideo] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       role: 'assistant',
-      text: 'WASD fly anytime · RMB look · LMB drag objects with cursor · scroll to move',
+      text: 'Studio mode: build scenes with chat · record Replay (JSON) or Video (WebM) · agents & cinematic camera in scripts',
+    },
+    {
+      role: 'assistant',
+      text: 'WASD fly · RMB look · LMB drag objects · scroll to move',
     },
   ]);
+
+  const pushStatus = (text: string) => {
+    setLogs((prev) => [...prev, { role: 'assistant', text }]);
+  };
+
+  const wireAgentBrain = (world: SandboxWorld, key: string, selectedModel: ModelId) => {
+    world.setLLMAgentHandler((agent, ctx) => {
+      if (!key.trim()) return Promise.resolve();
+      return thinkWithLLM(key.trim(), selectedModel, agent, ctx);
+    });
+  };
+
+  useEffect(() => {
+    apiKeyRef.current = apiKey;
+    modelRef.current = model;
+    if (worldRef.current) wireAgentBrain(worldRef.current, apiKey, model);
+  }, [apiKey, model]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -40,7 +70,11 @@ export default function App() {
 
     const world = new SandboxWorld(el);
     worldRef.current = world;
-    world.init().then(() => setReady(true));
+    wireAgentBrain(world, apiKeyRef.current, modelRef.current);
+    world.init().then(() => {
+      setReady(true);
+      setSandbox(world);
+    });
 
     return () => {
       world.dispose();
@@ -66,16 +100,30 @@ export default function App() {
       if (local) {
         const batch = normalizeBatch(local, prompt);
         const msg = worldRef.current.executeBatch(batch);
+        setHistory((h) => {
+          let next = appendTurn(h, { role: 'user', content: prompt });
+          return appendTurn(next, { role: 'assistant', content: msg });
+        });
         setLogs((prev) => [...prev, { role: 'assistant', text: msg }]);
       } else if (apiKey.trim()) {
         const sceneSummary = worldRef.current.getSceneSummary();
-        const { message, script } = await generateScriptWithAI(apiKey.trim(), model, prompt, sceneSummary);
+        const { message, script } = await generateScriptWithAI(
+          apiKey.trim(),
+          model,
+          prompt,
+          sceneSummary,
+          history,
+        );
         const result = executeSandboxScript(worldRef.current, script);
 
         if (!result.ok) {
           throw new Error(`${result.error}\n\nGenerated script:\n${script.slice(0, 400)}${script.length > 400 ? '…' : ''}`);
         }
 
+        setHistory((h) => {
+          let next = appendTurn(h, { role: 'user', content: prompt });
+          return appendTurn(next, { role: 'assistant', content: message, script });
+        });
         setLogs((prev) => [...prev, { role: 'assistant', text: message }]);
       } else {
         throw new Error('No API key set. Open settings (+) and add your OpenRouter key, or try "4 boxes from sky" / "clear".');
@@ -99,7 +147,7 @@ export default function App() {
       {
         role: 'assistant',
         text: key
-          ? `OpenRouter connected. AI will generate sandbox scripts using ${MODELS.find((m) => m.id === selectedModel)?.label ?? selectedModel}.`
+          ? `OpenRouter connected. Script + LLM agents use ${MODELS.find((m) => m.id === selectedModel)?.label ?? selectedModel}.`
           : 'API key cleared. Local fast-path only.',
       },
     ]);
@@ -116,11 +164,24 @@ export default function App() {
           {!ready && <span className="badge">Loading physics…</span>}
           {ready && <span className="badge ok">Sim running</span>}
           {apiKey ? <span className="badge ok">Script mode</span> : <span className="badge">Local mode</span>}
-          {ready && <span className="badge hint">WASD fly · RMB look · LMB drag</span>}
+          {ready && sandbox && sandbox.getAgentCount() > 0 && (
+            <span className="badge ok">{sandbox.getAgentCount()} agents</span>
+          )}
+          {(recordingReplay || recordingVideo) && <span className="badge rec">REC</span>}
         </div>
       </header>
 
       <div className="viewport" ref={viewportRef} />
+
+      <StudioToolbar
+        world={sandbox}
+        ready={ready}
+        recordingReplay={recordingReplay}
+        recordingVideo={recordingVideo}
+        onReplayRecordingChange={setRecordingReplay}
+        onVideoRecordingChange={setRecordingVideo}
+        onStatus={pushStatus}
+      />
 
       <aside className="log-panel" ref={logPanelRef}>
         {logs.map((entry, i) => (

@@ -48,6 +48,7 @@ export class ObjectInteraction {
   private right = new THREE.Vector3();
   private up = new THREE.Vector3(0, 1, 0);
   private keys = new Set<string>();
+  private cinematicOverride = false;
 
   private disposed = false;
 
@@ -74,8 +75,12 @@ export class ObjectInteraction {
   }
 
   update(dt: number): void {
-    if (this.disposed || this.isTyping()) return;
+    if (this.disposed || this.isTyping() || this.cinematicOverride) return;
     this.updateMovement(dt);
+  }
+
+  setCinematicOverride(on: boolean): void {
+    this.cinematicOverride = on;
   }
 
   dispose(): void {

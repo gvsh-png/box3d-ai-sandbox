@@ -63,6 +63,22 @@
   border-color: #334;
 }
 
+.badge.rec {
+  color: #fca5a5;
+  border-color: #7f2d2d;
+  animation: pulse-rec 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-rec {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
 .viewport {
   flex: 1;
   width: 100%;

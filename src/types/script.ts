@@ -34,6 +34,37 @@ world.force(fx,fy,fz, { position, radius })
 world.explode(x,y,z, radius, strength)
 world.rand(min,max)  world.color(name)  world.vec3(x,y,z)
 
+=== Agents (bots) ===
+world.agent({ id, body, think(ctx), brain:"script"|"llm", instruction, llmInterval })
+ctx: { position, velocity, forward, nearest[], raycast(dir?, maxDist?), dt, time }
+think returns: { force, impulse, torque, setVelocity, steer } — optional
+LLM brain needs API key in settings; calls OpenRouter each llmInterval seconds.
+
+Chase bot example:
+world.clear();
+const b = world.create(new THREE.BoxGeometry(1,1,1), new THREE.MeshStandardMaterial({color:0x00ff88}), {position:{x:0,y:2,z:0}, id:"bot"});
+world.agent({ id:"hunter", body:b, think:(ctx) => {
+  const t = ctx.nearest[0];
+  if (!t) return;
+  const dx = t.position.x - ctx.position.x;
+  const dz = t.position.z - ctx.position.z;
+  return { force: { x: dx * 2, y: 0, z: dz * 2 } };
+}});
+
+LLM bot: world.agent({ id:"brain", body:"bot", brain:"llm", instruction:"Avoid walls, explore randomly" });
+
+=== Cinematic camera ===
+world.camera.free()
+world.camera.follow(bodyIdOrHandle, { x, y, z } offset)
+world.camera.orbit(bodyId, radius, height, speed)
+world.camera.path([{ t:0, position:{x,y,z}, lookAt:{x,y,z} }, { t:5, ... }], loop)
+world.camera.lookAt(x,y,z)
+
+=== Recording (use toolbar buttons or script start) ===
+world.recordReplay(true)   — start JSON replay capture (stop via toolbar)
+world.startVideoRecording() — start WebM capture (stop via toolbar)
+
+
 === THREE.js (use freely) ===
 new THREE.BoxGeometry(w,h,d)
 new THREE.SphereGeometry(r)
