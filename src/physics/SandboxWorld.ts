@@ -187,7 +187,7 @@ export class SandboxWorld {
 
   startVideoRecording(quality = getVideoQuality()): void {
     if (this.videoSessionActive) return;
-    const profile = getVideoQualityProfile(quality, this.renderer.domElement);
+    const profile = getVideoQualityProfile(quality);
     this.videoCapture.setCaptureFps(profile.captureFps);
     this.videoCapture.start();
     this.videoSessionActive = true;

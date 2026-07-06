@@ -3,7 +3,7 @@ import { Muxer as WebmMuxer, ArrayBufferTarget as WebmBufferTarget } from 'webm-
 import type { ReplayData } from '../physics/ReplayRecorder';
 import type { SandboxWorld } from '../physics/SandboxWorld';
 import { interpolateReplayAt } from '../lib/replayUtils';
-import { getVideoQualityProfile, type VideoQuality } from '../lib/recordingPrefs';
+import { computeExportBitrate, getVideoQualityProfile, type VideoQuality } from '../lib/recordingPrefs';
 
 export type ExportProgress = { phase: string; progress: number };
 
@@ -45,10 +45,11 @@ export async function exportReplayToVideo(
     throw new Error('Not enough frames — record for at least a second before finishing.');
   }
 
-  const profile = getVideoQualityProfile(quality, world.renderer.domElement);
+  const profile = getVideoQualityProfile(quality);
   const duration = Math.max(1 / profile.exportFps, data.duration);
   const totalFrames = Math.max(2, Math.ceil(duration * profile.exportFps));
   const size = prepareExportSize(world, profile.exportPixelRatio);
+  const bitrate = computeExportBitrate(quality, size.width, size.height, profile.exportFps);
   const bodyRestore = snapshotBodies(world);
 
   try {
@@ -60,7 +61,7 @@ export async function exportReplayToVideo(
           size.width,
           size.height,
           profile.exportFps,
-          profile.bitrate,
+          bitrate,
           totalFrames,
           duration,
           'h264',
@@ -77,7 +78,7 @@ export async function exportReplayToVideo(
           size.width,
           size.height,
           profile.exportFps,
-          profile.bitrate,
+          bitrate,
           totalFrames,
           duration,
           'vp9',
@@ -92,7 +93,7 @@ export async function exportReplayToVideo(
       world,
       data,
       profile.exportFps,
-      profile.bitrate,
+      bitrate,
       totalFrames,
       duration,
       onProgress,
@@ -146,7 +147,7 @@ async function exportWithWebCodecs(
     },
   });
 
-  encoder.configure({ codec, width, height, bitrate, framerate: fps });
+  encoder.configure({ codec, width, height, bitrate, framerate: fps, latencyMode: 'quality' });
 
   const canvas = world.renderer.domElement;
   const frameDurUs = Math.round(1_000_000 / fps);
@@ -274,7 +275,8 @@ function prepareExportSize(world: SandboxWorld, exportPixelRatio: number): Expor
   const savedRatio = world.renderer.getPixelRatio();
   const cssW = world.containerSize.width;
   const cssH = world.containerSize.height;
-  let ratio = Math.min(savedRatio, exportPixelRatio, window.devicePixelRatio);
+  // Offline export can supersample above display DPR for sharper output.
+  let ratio = Math.min(exportPixelRatio, 4);
 
   world.renderer.setPixelRatio(ratio);
   world.renderer.setSize(cssW, cssH);
