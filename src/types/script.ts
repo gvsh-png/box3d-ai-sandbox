@@ -54,11 +54,13 @@ world.agent({ id:"hunter", body:b, think:(ctx) => {
 LLM bot: world.agent({ id:"brain", body:"bot", brain:"llm", instruction:"Avoid walls, explore randomly" });
 
 === Cinematic camera ===
-world.camera.free()
-world.camera.follow(bodyIdOrHandle, { x, y, z } offset)
-world.camera.orbit(bodyId, radius, height, speed)
+world.camera.free()  — same as user Fly mode; locks camera from script takeover
+world.camera.follow(bodyIdOrHandle, { x, y, z } offset)  — only if user clicked Orbit first
+world.camera.orbit(bodyId, radius, height, speed)        — only if user enabled cinematic mode
 world.camera.path([{ t:0, position:{x,y,z}, lookAt:{x,y,z} }, { t:5, ... }], loop)
 world.camera.lookAt(x,y,z)
+IMPORTANT: Do NOT call orbit/follow/path unless the user explicitly asks for cinematic camera.
+Default is free-fly — user controls the camera with WASD.
 
 === Recording (use toolbar buttons or script start) ===
 world.recordReplay(true)   — start JSON replay capture (stop via toolbar)

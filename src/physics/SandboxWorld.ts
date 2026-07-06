@@ -105,6 +105,7 @@ export class SandboxWorld {
       this.renderer.domElement,
       this.camera,
       () => this.bodies,
+      () => this.lockFlyCamera(),
     );
     this.ready = true;
     this.setupReplayApply();
@@ -124,6 +125,17 @@ export class SandboxWorld {
 
   getAgentCount(): number {
     return this.agents.count();
+  }
+
+  /** User fly mode — blocks script orbit/follow until Orbit is chosen. */
+  lockFlyCamera(): void {
+    this.cinematic.lockUserFly();
+    this.interaction?.syncFromCamera();
+  }
+
+  enableCinematicOrbit(bodyId: string, radius = 10, height = 4, speed = 0.35): void {
+    this.cinematic.releaseForCinematic();
+    this.cinematic.orbit(bodyId, radius, height, speed);
   }
 
   setLLMAgentHandler(handler: AgentSystem['llmHandler']): void {
@@ -192,7 +204,7 @@ export class SandboxWorld {
   clearSpawned(): void {
     this.clearScriptState();
     this.agents.clear();
-    this.cinematic.free();
+    this.cinematic.lockUserFly();
     this.replayPhysicsPaused = false;
     this.replay.stopPlayback();
     for (const entry of [...this.bodies]) {

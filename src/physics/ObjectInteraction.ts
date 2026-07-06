@@ -56,6 +56,7 @@ export class ObjectInteraction {
     private canvas: HTMLCanvasElement,
     private camera: THREE.PerspectiveCamera,
     private getPickables: () => Pickable[],
+    private onUserCameraControl?: () => void,
   ) {
     canvas.tabIndex = 0;
     canvas.style.outline = 'none';
@@ -81,6 +82,19 @@ export class ObjectInteraction {
 
   setCinematicOverride(on: boolean): void {
     this.cinematicOverride = on;
+    if (!on) this.syncFromCamera();
+  }
+
+  syncFromCamera(): void {
+    this.camPos.copy(this.camera.position);
+    const look = new THREE.Vector3();
+    this.camera.getWorldDirection(look);
+    this.pitch = Math.asin(THREE.MathUtils.clamp(look.y, -1, 1));
+    this.yaw = Math.atan2(look.x, look.z);
+  }
+
+  private userTookCamera(): void {
+    this.onUserCameraControl?.();
   }
 
   dispose(): void {
@@ -149,6 +163,7 @@ export class ObjectInteraction {
     this.moveVel.lerp(targetVel, t);
 
     if (this.moveVel.lengthSq() > 1e-6) {
+      this.userTookCamera();
       const delta = this.moveVel.clone().multiplyScalar(dt);
       this.camPos.add(delta);
 
@@ -270,6 +285,7 @@ export class ObjectInteraction {
     this.pointerPrev = { x: e.clientX, y: e.clientY };
 
     if (this.rmbDown) {
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) this.userTookCamera();
       this.yaw -= dx * LOOK_SENS;
       this.pitch = THREE.MathUtils.clamp(this.pitch - dy * LOOK_SENS, -1.55, 1.55);
       this.applyCamera();
@@ -353,6 +369,7 @@ export class ObjectInteraction {
 
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
+    this.userTookCamera();
     this.updateBasis();
     this.camPos.addScaledVector(this.forward, -e.deltaY * 0.01 * SCROLL_SPEED);
 

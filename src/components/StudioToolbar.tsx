@@ -85,7 +85,7 @@ export function StudioToolbar({
   };
 
   const camFree = () => {
-    world.cinematic.free();
+    world.lockFlyCamera();
     onStatus('Camera: free fly');
   };
 
@@ -93,7 +93,7 @@ export function StudioToolbar({
     const ids = [...world.getSceneSummary().match(/ids: \[(.*?)\]/)?.[1]?.split(', ') ?? []];
     const target = ids.find((id) => id && id !== 'ground') ?? ids[0];
     if (target) {
-      world.cinematic.orbit(target);
+      world.enableCinematicOrbit(target);
       onStatus(`Camera: orbit ${target}`);
     } else {
       onStatus('No body to orbit');

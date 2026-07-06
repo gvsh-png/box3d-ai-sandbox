@@ -36,7 +36,7 @@ export class WorldRuntime {
   private bodies = new Map<string, BodyHandle>();
 
   readonly camera = {
-    free: () => this.world.cinematic.free(),
+    free: () => this.world.lockFlyCamera(),
     follow: (body: BodyRef, offset?: Vec3) => {
       this.world.cinematic.follow(resolveBodyId(body), offset);
     },
@@ -47,6 +47,7 @@ export class WorldRuntime {
       this.world.cinematic.setPath(keyframes, loop);
     },
     lookAt: (x: number, y: number, z: number) => {
+      if (this.world.cinematic.userFlyLock) return;
       this.world.cinematic.lookAt(x, y, z);
     },
   };

@@ -20,6 +20,8 @@ export class CinematicCamera {
   pathTime = 0;
   pathLoop = false;
   active = false;
+  /** When true, scripts cannot switch to orbit/follow/path — user is flying. */
+  userFlyLock = true;
 
   private lookTarget = new THREE.Vector3(0, 2, 0);
   private temp = new THREE.Vector3();
@@ -34,7 +36,17 @@ export class CinematicCamera {
     this.targetId = null;
   }
 
+  lockUserFly(): void {
+    this.userFlyLock = true;
+    this.free();
+  }
+
+  releaseForCinematic(): void {
+    this.userFlyLock = false;
+  }
+
   follow(bodyId: string, offset?: { x: number; y: number; z: number }): void {
+    if (this.userFlyLock) return;
     this.mode = 'follow';
     this.active = true;
     this.targetId = bodyId;
@@ -42,6 +54,7 @@ export class CinematicCamera {
   }
 
   orbit(bodyId: string, radius = 10, height = 4, speed = 0.35): void {
+    if (this.userFlyLock) return;
     this.mode = 'orbit';
     this.active = true;
     this.targetId = bodyId;
@@ -51,6 +64,7 @@ export class CinematicCamera {
   }
 
   setPath(keyframes: CameraKeyframe[], loop = false): void {
+    if (this.userFlyLock) return;
     this.mode = 'path';
     this.active = keyframes.length > 0;
     this.path = keyframes.sort((a, b) => a.t - b.t);
