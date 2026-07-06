@@ -28,8 +28,8 @@ world.addPhysics(mesh, opts)     — add physics to a mesh you built
 world.add(object3d)              — add visual-only objects (lights, groups)
 world.get(id)                    — body handle: .mesh .setPosition .applyImpulse .setVelocity
 world.onTick((dt, world) => {})  — run every frame (motors, AI, animations)
-world.joint(idA, idB, "hinge"|"fixed", { axis })
-world.motor(bodyId, torque, { axis })
+world.joint(idA, idB, "hinge"|"fixed", { axis })  — idA/idB can be strings OR body handles from world.create()
+world.motor(bodyId, torque, { axis })              — bodyId can be string OR body handle
 world.force(fx,fy,fz, { position, radius })
 world.explode(x,y,z, radius, strength)
 world.rand(min,max)  world.color(name)  world.vec3(x,y,z)
@@ -75,10 +75,21 @@ world.onTick((dt) => { h.mesh.rotation.y += dt * 2; });
 
 Car with wheels (hinge + motor):
 world.clear();
-const chassis = world.create(new THREE.BoxGeometry(2,0.4,4), new THREE.MeshStandardMaterial({ color: 0xcc0000 }), { position:{x:0,y:1,z:0}, id:"chassis" });
-const w1 = world.create(new THREE.CylinderGeometry(0.35,0.35,0.3,16), new THREE.MeshStandardMaterial({ color:0x111111 }), { position:{x:-1,y:0.5,z:1.2}, rotation:{x:0,y:0,z:90}, id:"w1" });
-world.joint("chassis","w1","hinge",{axis:{x:1,y:0,z:0}});
-world.motor("w1", 3);
+world.create(new THREE.BoxGeometry(2,0.4,4), new THREE.MeshStandardMaterial({ color: 0xcc0000 }), { position:{x:0,y:1,z:0}, id:"chassis" });
+const wheelGeo = new THREE.CylinderGeometry(0.35,0.35,0.3,16);
+const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+const wheels = [
+  { id:"w-fl", x:-1.1, z: 1.3 },
+  { id:"w-fr", x: 1.1, z: 1.3 },
+  { id:"w-rl", x:-1.1, z:-1.3 },
+  { id:"w-rr", x: 1.1, z:-1.3 },
+];
+for (const w of wheels) {
+  const h = world.create(wheelGeo, wheelMat, { position:{x:w.x,y:0.5,z:w.z}, rotation:{x:0,y:0,z:90}, id:w.id });
+  world.joint("chassis", h, "hinge", { axis:{x:1,y:0,z:0} });
+}
+world.motor("w-rl", 4, { axis:{x:1,y:0,z:0} });
+world.motor("w-rr", 4, { axis:{x:1,y:0,z:0} });
 
 RULES:
 - Y is up. Ground at y=0.

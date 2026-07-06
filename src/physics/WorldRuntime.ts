@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { SandboxWorld } from './SandboxWorld';
+import { resolveAxis, resolveBodyId, type AxisArg, type BodyRef } from './scriptArgs';
 import type { Vec3 } from '../types/commands';
 
 export type PhysicsOpts = {
@@ -103,12 +104,23 @@ export class WorldRuntime {
     return this.bodies.get(id);
   }
 
-  joint(bodyA: string, bodyB: string, type: 'hinge' | 'fixed' = 'hinge', axis?: Vec3): void {
-    this.world.execute({ action: 'addJoint', type, bodyA, bodyB, axis });
+  joint(bodyA: BodyRef, bodyB: BodyRef, type: 'hinge' | 'fixed' = 'hinge', axisArg?: AxisArg): void {
+    this.world.execute({
+      action: 'addJoint',
+      type,
+      bodyA: resolveBodyId(bodyA),
+      bodyB: resolveBodyId(bodyB),
+      axis: resolveAxis(axisArg),
+    });
   }
 
-  motor(bodyId: string, torque: number, axis?: Vec3): void {
-    this.world.execute({ action: 'setMotor', bodyId, torque, axis });
+  motor(bodyId: BodyRef, torque: number, axisArg?: AxisArg): void {
+    this.world.execute({
+      action: 'setMotor',
+      bodyId: resolveBodyId(bodyId),
+      torque,
+      axis: resolveAxis(axisArg),
+    });
   }
 
   force(fx: number, fy: number, fz: number, opts?: { position?: Vec3; radius?: number }): void {

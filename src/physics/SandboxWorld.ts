@@ -558,7 +558,8 @@ export class SandboxWorld {
     if (!this.world) return;
     const a = this.bodyById.get(cmd.bodyA);
     const b = this.bodyById.get(cmd.bodyB);
-    if (!a || !b) return;
+    if (!a) throw new Error(`Joint failed: body "${cmd.bodyA}" not found — use string ids from world.create({ id: "..." })`);
+    if (!b) throw new Error(`Joint failed: body "${cmd.bodyB}" not found — use string ids from world.create({ id: "..." })`);
 
     const axis = cmd.axis ?? { x: 1, y: 0, z: 0 };
     const jointData =
@@ -571,6 +572,9 @@ export class SandboxWorld {
   }
 
   private setMotor(cmd: SetMotorCommand): void {
+    if (!this.bodyById.has(cmd.bodyId)) {
+      throw new Error(`Motor failed: body "${cmd.bodyId}" not found`);
+    }
     this.motors.set(cmd.bodyId, {
       torque: cmd.torque,
       axis: cmd.axis ?? { x: 1, y: 0, z: 0 },

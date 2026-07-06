@@ -1,5 +1,6 @@
 import type { SimulationCommand, ShapeKind, Vec3 } from '../types/commands';
 import type { SandboxWorld } from './SandboxWorld';
+import { resolveAxis, resolveBodyId, type AxisArg, type BodyRef } from './scriptArgs';
 
 export type SpawnOpts = {
   shape?: ShapeKind;
@@ -168,16 +169,27 @@ export class SandboxAPI {
   }
 
   joint(
-    bodyA: string,
-    bodyB: string,
+    bodyA: BodyRef,
+    bodyB: BodyRef,
     type: 'hinge' | 'fixed' = 'hinge',
-    opts: { axis?: Vec3 } = {},
+    opts: AxisArg = {},
   ): void {
-    this.world.execute({ action: 'addJoint', type, bodyA, bodyB, axis: opts.axis });
+    this.world.execute({
+      action: 'addJoint',
+      type,
+      bodyA: resolveBodyId(bodyA),
+      bodyB: resolveBodyId(bodyB),
+      axis: resolveAxis(opts),
+    });
   }
 
-  motor(bodyId: string, torque: number, opts: { axis?: Vec3 } = {}): void {
-    this.world.execute({ action: 'setMotor', bodyId, torque, axis: opts.axis });
+  motor(bodyId: BodyRef, torque: number, opts: AxisArg = {}): void {
+    this.world.execute({
+      action: 'setMotor',
+      bodyId: resolveBodyId(bodyId),
+      torque,
+      axis: resolveAxis(opts),
+    });
   }
 
   force(fx: number, fy: number, fz: number, opts: { position?: Vec3; radius?: number } = {}): void {
