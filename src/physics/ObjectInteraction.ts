@@ -15,22 +15,35 @@ type DragState = {
   lastTime: number;
   velocity: THREE.Vector3;
   savedType: RAPIER.RigidBodyType;
+  minCenterY: number;
 };
 
+const GROUND_SURFACE_Y = 0.02;
+const LOOK_SENS = 0.003;
+const PAN_SENS = 0.012;
+const SCROLL_SENS = 0.04;
+
 /**
- * Mouse interaction: left-drag objects, right-drag orbit camera, scroll zoom.
+ * Fly camera + object dragging.
+ * RMB: look around | LMB on object: drag | LMB on empty: pan | Scroll: move forward (moves object too while dragging)
  */
 export class ObjectInteraction {
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
   private drag: DragState | null = null;
   private hovered: Pickable | null = null;
-  private orbitDragging = false;
-  private orbitPrev = { x: 0, y: 0 };
-  private theta = 0.8;
-  private phi = 0.6;
-  private radius = 16;
-  private target = new THREE.Vector3(0, 2, 0);
+  private lookDragging = false;
+  private panDragging = false;
+  private pointerPrev = { x: 0, y: 0 };
+
+  private camPos = new THREE.Vector3(8, 6, 12);
+  private yaw = -0.6;
+  private pitch = -0.35;
+
+  private forward = new THREE.Vector3();
+  private right = new THREE.Vector3();
+  private up = new THREE.Vector3(0, 1, 0);
+
   private disposed = false;
 
   constructor(
@@ -46,7 +59,7 @@ export class ObjectInteraction {
     canvas.addEventListener('pointercancel', this.onPointerUp);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
     window.addEventListener('pointerup', this.onPointerUp);
-    this.updateCamera();
+    this.applyCamera();
   }
 
   dispose(): void {
@@ -64,6 +77,64 @@ export class ObjectInteraction {
 
   private preventContext = (e: Event) => e.preventDefault();
 
+  private updateBasis(): void {
+    this.forward.set(
+      Math.cos(this.pitch) * Math.sin(this.yaw),
+      Math.sin(this.pitch),
+      Math.cos(this.pitch) * Math.cos(this.yaw),
+    );
+    this.right.crossVectors(this.forward, this.up).normalize();
+  }
+
+  private applyCamera(): void {
+    this.updateBasis();
+    this.camera.position.copy(this.camPos);
+    this.camera.lookAt(this.camPos.clone().add(this.forward));
+  }
+
+  private moveAlongView(amount: number): void {
+    this.updateBasis();
+    const delta = this.forward.clone().multiplyScalar(amount);
+    this.camPos.add(delta);
+
+    if (this.drag) {
+      const pos = this.drag.lastPos.clone().add(delta);
+      this.clampAndSetDragPosition(pos);
+    }
+
+    this.applyCamera();
+  }
+
+  private getMinCenterY(mesh: THREE.Mesh): number {
+    const box = new THREE.Box3().setFromObject(mesh);
+    const halfHeight = Math.max(0.15, (box.max.y - box.min.y) * 0.5);
+    return GROUND_SURFACE_Y + halfHeight;
+  }
+
+  private clampY(y: number, minCenterY: number): number {
+    return Math.max(minCenterY, y);
+  }
+
+  private clampAndSetDragPosition(pos: THREE.Vector3): void {
+    if (!this.drag) return;
+
+    pos.y = this.clampY(pos.y, this.drag.minCenterY);
+
+    const now = performance.now();
+    const dt = Math.max(0.001, (now - this.drag.lastTime) / 1000);
+
+    this.drag.velocity.set(
+      (pos.x - this.drag.lastPos.x) / dt,
+      (pos.y - this.drag.lastPos.y) / dt,
+      (pos.z - this.drag.lastPos.z) / dt,
+    );
+
+    this.drag.entry.body.setNextKinematicTranslation({ x: pos.x, y: pos.y, z: pos.z });
+    this.drag.entry.mesh.position.copy(pos);
+    this.drag.lastPos.copy(pos);
+    this.drag.lastTime = now;
+  }
+
   private updatePointer(e: PointerEvent): void {
     const rect = this.canvas.getBoundingClientRect();
     this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -76,7 +147,6 @@ export class ObjectInteraction {
     const meshes = this.getPickables().map((p) => p.mesh);
     const hits = this.raycaster.intersectObjects(meshes, false);
     if (!hits.length) return null;
-
     const mesh = hits[0].object as THREE.Mesh;
     return this.getPickables().find((p) => p.mesh === mesh) ?? null;
   }
@@ -90,21 +160,31 @@ export class ObjectInteraction {
   private onPointerDown = (e: PointerEvent): void => {
     if (this.disposed) return;
 
-    // Right or middle mouse → orbit camera
-    if (e.button === 1 || e.button === 2) {
-      this.orbitDragging = true;
-      this.orbitPrev = { x: e.clientX, y: e.clientY };
+    this.pointerPrev = { x: e.clientX, y: e.clientY };
+
+    // Right mouse → look around
+    if (e.button === 2) {
+      this.lookDragging = true;
       this.canvas.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+
+    // Middle mouse → pan
+    if (e.button === 1) {
+      this.panDragging = true;
+      this.canvas.setPointerCapture(e.pointerId);
+      e.preventDefault();
       return;
     }
 
     if (e.button !== 0) return;
 
     const hit = this.pick(e);
+
+    // Left on empty space → pan (free move, not orbit-locked)
     if (!hit || !hit.body.isDynamic()) {
-      // Left drag on empty space also orbits
-      this.orbitDragging = true;
-      this.orbitPrev = { x: e.clientX, y: e.clientY };
+      this.panDragging = true;
       this.canvas.setPointerCapture(e.pointerId);
       return;
     }
@@ -135,6 +215,7 @@ export class ObjectInteraction {
       lastTime: performance.now(),
       velocity: new THREE.Vector3(),
       savedType,
+      minCenterY: this.getMinCenterY(hit.mesh),
     };
 
     this.setHover(hit);
@@ -143,13 +224,29 @@ export class ObjectInteraction {
   private onPointerMove = (e: PointerEvent): void => {
     if (this.disposed) return;
 
-    if (this.orbitDragging) {
-      const dx = e.clientX - this.orbitPrev.x;
-      const dy = e.clientY - this.orbitPrev.y;
-      this.theta -= dx * 0.005;
-      this.phi = Math.max(0.15, Math.min(1.4, this.phi - dy * 0.005));
-      this.orbitPrev = { x: e.clientX, y: e.clientY };
-      this.updateCamera();
+    const dx = e.clientX - this.pointerPrev.x;
+    const dy = e.clientY - this.pointerPrev.y;
+    this.pointerPrev = { x: e.clientX, y: e.clientY };
+
+    if (this.lookDragging) {
+      this.yaw -= dx * LOOK_SENS;
+      this.pitch = Math.max(-1.52, Math.min(1.52, this.pitch - dy * LOOK_SENS));
+      this.applyCamera();
+      return;
+    }
+
+    if (this.panDragging) {
+      this.updateBasis();
+      const pan = this.right.clone().multiplyScalar(-dx * PAN_SENS)
+        .add(new THREE.Vector3(0, 1, 0).multiplyScalar(dy * PAN_SENS));
+      this.camPos.add(pan);
+
+      if (this.drag) {
+        const pos = this.drag.lastPos.clone().add(pan);
+        this.clampAndSetDragPosition(pos);
+      }
+
+      this.applyCamera();
       return;
     }
 
@@ -158,20 +255,7 @@ export class ObjectInteraction {
       if (!this.planeHit(e, this.drag.plane, hitPoint)) return;
 
       const pos = hitPoint.add(this.drag.offset);
-      const now = performance.now();
-      const dt = Math.max(0.001, (now - this.drag.lastTime) / 1000);
-
-      this.drag.velocity.set(
-        (pos.x - this.drag.lastPos.x) / dt,
-        (pos.y - this.drag.lastPos.y) / dt,
-        (pos.z - this.drag.lastPos.z) / dt,
-      );
-
-      this.drag.entry.body.setNextKinematicTranslation({ x: pos.x, y: pos.y, z: pos.z });
-      this.drag.entry.mesh.position.copy(pos);
-
-      this.drag.lastPos.copy(pos);
-      this.drag.lastTime = now;
+      this.clampAndSetDragPosition(pos);
       return;
     }
 
@@ -186,13 +270,12 @@ export class ObjectInteraction {
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (this.orbitDragging) {
-      this.orbitDragging = false;
-      try {
-        this.canvas.releasePointerCapture(e.pointerId);
-      } catch {
-        /* already released */
-      }
+    this.lookDragging = false;
+    this.panDragging = false;
+    try {
+      this.canvas.releasePointerCapture(e.pointerId);
+    } catch {
+      /* already released */
     }
     this.releaseDrag();
   };
@@ -237,14 +320,7 @@ export class ObjectInteraction {
 
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
-    this.radius = Math.max(5, Math.min(40, this.radius + e.deltaY * 0.02));
-    this.updateCamera();
+    const amount = -e.deltaY * SCROLL_SENS;
+    this.moveAlongView(amount);
   };
-
-  private updateCamera(): void {
-    this.camera.position.x = this.target.x + this.radius * Math.sin(this.phi) * Math.cos(this.theta);
-    this.camera.position.y = this.target.y + this.radius * Math.cos(this.phi);
-    this.camera.position.z = this.target.z + this.radius * Math.sin(this.phi) * Math.sin(this.theta);
-    this.camera.lookAt(this.target);
-  }
 }
