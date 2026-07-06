@@ -7,48 +7,57 @@ type Pickable = {
   id: string;
 };
 
-type DragState = {
+type GrabState = {
   entry: Pickable;
-  plane: THREE.Plane;
-  offset: THREE.Vector3;
-  lastPos: THREE.Vector3;
-  lastTime: number;
-  velocity: THREE.Vector3;
-  savedType: RAPIER.RigidBodyType;
+  holdDistance: number;
+  target: THREE.Vector3;
   minCenterY: number;
 };
 
 const GROUND_SURFACE_Y = 0.02;
-const LOOK_SENS = 0.003;
-const PAN_SENS = 0.012;
-const SCROLL_SENS = 0.04;
-const MOVE_SPEED = 10;
+
+// Camera feel
+const LOOK_SENS = 0.002;
+const MOVE_ACCEL = 55;
+const MOVE_MAX_SPEED = 16;
+const MOVE_DAMPING = 10;
+const SCROLL_IMPULSE = 1.8;
+
+// Grab feel (spring physics — object stays dynamic)
+const GRAB_SPRING = 140;
+const GRAB_DAMPING = 22;
+const GRAB_DIST_MIN = 2.5;
+const GRAB_DIST_MAX = 22;
+const GRAB_SPIN_DAMP = 0.88;
 
 /**
- * Fly camera + object dragging.
- * LMB: drag object / pan empty | RMB: look (works while holding LMB drag) | Scroll: move
+ * Smooth fly camera + spring-based object grab (GMod-style).
+ *
+ * RMB / MMB — look around
+ * WASD + Space/Shift — smooth fly
+ * Scroll — dolly forward/back (adjust grab distance while holding)
+ * LMB on object — spring grab (release to throw)
  */
 export class ObjectInteraction {
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
-  private drag: DragState | null = null;
+  private grab: GrabState | null = null;
   private hovered: Pickable | null = null;
   private lmbDown = false;
   private rmbDown = false;
-  private panActive = false;
+  private mmbDown = false;
   private capturePointerId: number | null = null;
   private pointerPrev = { x: 0, y: 0 };
 
   private camPos = new THREE.Vector3(8, 6, 12);
   private yaw = -0.6;
   private pitch = -0.35;
+  private moveVel = new THREE.Vector3();
 
   private forward = new THREE.Vector3();
   private right = new THREE.Vector3();
   private up = new THREE.Vector3(0, 1, 0);
   private keys = new Set<string>();
-  private moveLoopId = 0;
-  private lastMoveTime = performance.now();
 
   private disposed = false;
 
@@ -67,14 +76,19 @@ export class ObjectInteraction {
     window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
-    this.lastMoveTime = performance.now();
-    this.moveLoopId = requestAnimationFrame(this.tickMovement);
     this.applyCamera();
+  }
+
+  /** Called each physics frame from SandboxWorld. */
+  update(dt: number): void {
+    if (this.disposed) return;
+    this.updateCameraMovement(dt);
+    this.updateGrabSpring(dt);
   }
 
   dispose(): void {
     this.disposed = true;
-    this.releaseDrag();
+    this.releaseGrab();
     this.setHover(null);
     this.canvas.removeEventListener('contextmenu', this.preventContext);
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
@@ -85,7 +99,6 @@ export class ObjectInteraction {
     window.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
-    cancelAnimationFrame(this.moveLoopId);
   }
 
   private preventContext = (e: Event) => e.preventDefault();
@@ -105,23 +118,6 @@ export class ObjectInteraction {
     this.camera.lookAt(this.camPos.clone().add(this.forward));
   }
 
-  private applyMoveDelta(delta: THREE.Vector3): void {
-    if (delta.lengthSq() < 1e-8) return;
-    this.camPos.add(delta);
-
-    if (this.drag) {
-      const pos = this.drag.lastPos.clone().add(delta);
-      this.clampAndSetDragPosition(pos);
-    }
-
-    this.applyCamera();
-  }
-
-  private moveAlongView(amount: number): void {
-    this.updateBasis();
-    this.applyMoveDelta(this.forward.clone().multiplyScalar(amount));
-  }
-
   private isTypingTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false;
     const tag = target.tagName;
@@ -137,66 +133,84 @@ export class ObjectInteraction {
     this.keys.delete(e.code);
   };
 
-  private tickMovement = (now: number): void => {
-    if (!this.disposed) {
-      const dt = Math.min(0.05, (now - this.lastMoveTime) / 1000);
-      this.lastMoveTime = now;
+  private updateCameraMovement(dt: number): void {
+    if (this.isTypingTarget(document.activeElement)) return;
 
-      if (this.keys.size > 0 && !this.isTypingTarget(document.activeElement)) {
-        this.updateBasis();
+    this.updateBasis();
 
-        const forwardFlat = new THREE.Vector3(this.forward.x, 0, this.forward.z);
-        if (forwardFlat.lengthSq() < 1e-6) forwardFlat.set(0, 0, -1);
-        forwardFlat.normalize();
+    const wish = new THREE.Vector3();
+    const forwardFlat = new THREE.Vector3(this.forward.x, 0, this.forward.z);
+    if (forwardFlat.lengthSq() < 1e-6) forwardFlat.set(0, 0, -1);
+    forwardFlat.normalize();
+    const rightFlat = new THREE.Vector3().crossVectors(forwardFlat, this.up).normalize();
 
-        const rightFlat = new THREE.Vector3().crossVectors(forwardFlat, this.up).normalize();
+    if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) wish.add(forwardFlat);
+    if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) wish.sub(forwardFlat);
+    if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) wish.add(rightFlat);
+    if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) wish.sub(rightFlat);
+    if (this.keys.has('Space')) wish.add(this.up);
+    if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) wish.sub(this.up);
 
-        const move = new THREE.Vector3();
-        if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) move.add(forwardFlat);
-        if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) move.sub(forwardFlat);
-        if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) move.add(rightFlat);
-        if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) move.sub(rightFlat);
-        if (this.keys.has('Space')) move.add(this.up);
-        if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) move.sub(this.up);
-
-        if (move.lengthSq() > 0) {
-          move.normalize().multiplyScalar(MOVE_SPEED * dt);
-          this.applyMoveDelta(move);
-        }
-      }
-
-      this.moveLoopId = requestAnimationFrame(this.tickMovement);
+    if (wish.lengthSq() > 0) {
+      wish.normalize().multiplyScalar(MOVE_ACCEL * dt);
+      this.moveVel.add(wish);
     }
-  };
+
+    const speed = this.moveVel.length();
+    if (speed > MOVE_MAX_SPEED) {
+      this.moveVel.multiplyScalar(MOVE_MAX_SPEED / speed);
+    }
+
+    this.moveVel.multiplyScalar(Math.exp(-MOVE_DAMPING * dt));
+
+    if (this.moveVel.lengthSq() > 1e-8) {
+      this.camPos.addScaledVector(this.moveVel, dt);
+      this.applyCamera();
+    }
+  }
+
+  private updateGrabTarget(): void {
+    if (!this.grab) return;
+    this.updateBasis();
+    this.grab.target
+      .copy(this.camPos)
+      .addScaledVector(this.forward, this.grab.holdDistance);
+    this.grab.target.y = Math.max(this.grab.minCenterY, this.grab.target.y);
+  }
+
+  private updateGrabSpring(dt: number): void {
+    if (!this.grab) return;
+
+    this.updateGrabTarget();
+
+    const body = this.grab.entry.body;
+    const pos = body.translation();
+    const vel = body.linvel();
+
+    const dx = this.grab.target.x - pos.x;
+    const dy = this.grab.target.y - pos.y;
+    const dz = this.grab.target.z - pos.z;
+
+    body.applyImpulse(
+      {
+        x: (dx * GRAB_SPRING - vel.x * GRAB_DAMPING) * dt,
+        y: (dy * GRAB_SPRING - vel.y * GRAB_DAMPING) * dt,
+        z: (dz * GRAB_SPRING - vel.z * GRAB_DAMPING) * dt,
+      },
+      true,
+    );
+
+    const av = body.angvel();
+    body.setAngvel(
+      { x: av.x * GRAB_SPIN_DAMP, y: av.y * GRAB_SPIN_DAMP, z: av.z * GRAB_SPIN_DAMP },
+      true,
+    );
+  }
 
   private getMinCenterY(mesh: THREE.Mesh): number {
     const box = new THREE.Box3().setFromObject(mesh);
     const halfHeight = Math.max(0.15, (box.max.y - box.min.y) * 0.5);
     return GROUND_SURFACE_Y + halfHeight;
-  }
-
-  private clampY(y: number, minCenterY: number): number {
-    return Math.max(minCenterY, y);
-  }
-
-  private clampAndSetDragPosition(pos: THREE.Vector3): void {
-    if (!this.drag) return;
-
-    pos.y = this.clampY(pos.y, this.drag.minCenterY);
-
-    const now = performance.now();
-    const dt = Math.max(0.001, (now - this.drag.lastTime) / 1000);
-
-    this.drag.velocity.set(
-      (pos.x - this.drag.lastPos.x) / dt,
-      (pos.y - this.drag.lastPos.y) / dt,
-      (pos.z - this.drag.lastPos.z) / dt,
-    );
-
-    this.drag.entry.body.setNextKinematicTranslation({ x: pos.x, y: pos.y, z: pos.z });
-    this.drag.entry.mesh.position.copy(pos);
-    this.drag.lastPos.copy(pos);
-    this.drag.lastTime = now;
   }
 
   private updatePointer(e: PointerEvent): void {
@@ -205,20 +219,13 @@ export class ObjectInteraction {
     this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   }
 
-  private pick(e: PointerEvent): Pickable | null {
-    this.updatePointer(e);
+  private pick(): Pickable | null {
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const meshes = this.getPickables().map((p) => p.mesh);
     const hits = this.raycaster.intersectObjects(meshes, false);
     if (!hits.length) return null;
     const mesh = hits[0].object as THREE.Mesh;
     return this.getPickables().find((p) => p.mesh === mesh) ?? null;
-  }
-
-  private planeHit(e: PointerEvent, plane: THREE.Plane, out: THREE.Vector3): boolean {
-    this.updatePointer(e);
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    return this.raycaster.ray.intersectPlane(plane, out) !== null;
   }
 
   private capturePointer(e: PointerEvent): void {
@@ -233,19 +240,14 @@ export class ObjectInteraction {
       try {
         this.canvas.releasePointerCapture(e.pointerId);
       } catch {
-        /* already released */
+        /* ok */
       }
       this.capturePointerId = null;
     }
   }
 
-  private anyButtonDown(): boolean {
-    return this.lmbDown || this.rmbDown || this.panActive;
-  }
-
   private onPointerDown = (e: PointerEvent): void => {
     if (this.disposed) return;
-
     this.pointerPrev = { x: e.clientX, y: e.clientY };
 
     if (e.button === 2) {
@@ -256,7 +258,7 @@ export class ObjectInteraction {
     }
 
     if (e.button === 1) {
-      this.panActive = true;
+      this.mmbDown = true;
       this.capturePointer(e);
       e.preventDefault();
       return;
@@ -265,43 +267,29 @@ export class ObjectInteraction {
     if (e.button !== 0) return;
 
     this.lmbDown = true;
-    const hit = this.pick(e);
+    this.updatePointer(e);
+    const hit = this.pick();
 
     if (!hit || !hit.body.isDynamic()) {
-      this.panActive = true;
       this.capturePointer(e);
       return;
     }
 
-    const hitPoint = new THREE.Vector3();
-    const bodyPos = hit.body.translation();
-    const grabPoint = new THREE.Vector3(bodyPos.x, bodyPos.y, bodyPos.z);
-
-    const normal = new THREE.Vector3();
-    this.camera.getWorldDirection(normal);
-    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, grabPoint);
-
-    if (!this.planeHit(e, plane, hitPoint)) return;
-
     this.capturePointer(e);
     this.canvas.style.cursor = 'grabbing';
 
-    const savedType = hit.body.bodyType();
-    hit.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
-    hit.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-    hit.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    const bodyPos = hit.body.translation();
+    const dist = this.camPos.distanceTo(new THREE.Vector3(bodyPos.x, bodyPos.y, bodyPos.z));
+    const holdDistance = THREE.MathUtils.clamp(dist, GRAB_DIST_MIN, GRAB_DIST_MAX);
 
-    this.drag = {
+    this.grab = {
       entry: hit,
-      plane,
-      offset: grabPoint.clone().sub(hitPoint),
-      lastPos: grabPoint.clone(),
-      lastTime: performance.now(),
-      velocity: new THREE.Vector3(),
-      savedType,
+      holdDistance,
+      target: new THREE.Vector3(bodyPos.x, bodyPos.y, bodyPos.z),
       minCenterY: this.getMinCenterY(hit.mesh),
     };
 
+    hit.body.wakeUp();
     this.setHover(hit);
   };
 
@@ -312,43 +300,15 @@ export class ObjectInteraction {
     const dy = e.clientY - this.pointerPrev.y;
     this.pointerPrev = { x: e.clientX, y: e.clientY };
 
-    let cameraChanged = false;
-
-    // RMB look — works even while LMB is dragging an object
-    if (this.rmbDown) {
+    if (this.rmbDown || this.mmbDown) {
       this.yaw -= dx * LOOK_SENS;
-      this.pitch = Math.max(-1.52, Math.min(1.52, this.pitch - dy * LOOK_SENS));
-      cameraChanged = true;
-    }
-
-    // Pan empty space / middle mouse
-    if (this.panActive && !this.drag && !this.rmbDown) {
-      this.updateBasis();
-      const pan = this.right.clone().multiplyScalar(-dx * PAN_SENS)
-        .add(new THREE.Vector3(0, 1, 0).multiplyScalar(dy * PAN_SENS));
-      this.applyMoveDelta(pan);
-      if (cameraChanged) this.applyCamera();
-      return;
-    }
-
-    // Object drag — LMB only, pause while RMB look is active
-    if (this.drag && this.lmbDown && !this.rmbDown) {
-      const hitPoint = new THREE.Vector3();
-      if (this.planeHit(e, this.drag.plane, hitPoint)) {
-        const pos = hitPoint.add(this.drag.offset);
-        this.clampAndSetDragPosition(pos);
-      }
-      if (cameraChanged) this.applyCamera();
-      return;
-    }
-
-    if (cameraChanged) {
+      this.pitch = THREE.MathUtils.clamp(this.pitch - dy * LOOK_SENS, -1.52, 1.52);
       this.applyCamera();
-      return;
     }
 
-    if (!this.lmbDown && !this.rmbDown) {
-      const hit = this.pick(e);
+    if (!this.lmbDown && !this.rmbDown && !this.mmbDown) {
+      this.updatePointer(e);
+      const hit = this.pick();
       if (hit?.body.isDynamic()) {
         this.setHover(hit);
         this.canvas.style.cursor = 'grab';
@@ -360,39 +320,24 @@ export class ObjectInteraction {
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (e.button === 2) {
-      this.rmbDown = false;
-    } else if (e.button === 1) {
-      this.panActive = false;
-    } else if (e.button === 0) {
+    if (e.button === 2) this.rmbDown = false;
+    else if (e.button === 1) this.mmbDown = false;
+    else if (e.button === 0) {
       this.lmbDown = false;
-      this.panActive = false;
-      this.releaseDrag();
+      this.releaseGrab();
     }
 
-    if (!this.anyButtonDown()) {
+    if (!this.lmbDown && !this.rmbDown && !this.mmbDown) {
       this.releaseCapture(e);
       this.canvas.style.cursor = this.hovered ? 'grab' : 'default';
     }
   };
 
-  private releaseDrag(): void {
-    if (!this.drag) return;
-
-    const { entry, velocity, savedType } = this.drag;
-    const t = entry.body.translation();
-
-    entry.body.setBodyType(savedType, true);
-    entry.body.setTranslation({ x: t.x, y: t.y, z: t.z }, true);
-    entry.body.setLinvel(
-      { x: velocity.x * 0.35, y: velocity.y * 0.35, z: velocity.z * 0.35 },
-      true,
-    );
-
-    this.drag = null;
-    if (!this.lmbDown) {
-      this.canvas.style.cursor = this.hovered ? 'grab' : 'default';
-    }
+  private releaseGrab(): void {
+    if (!this.grab) return;
+    this.grab.entry.body.wakeUp();
+    this.grab = null;
+    this.canvas.style.cursor = this.hovered ? 'grab' : 'default';
   }
 
   private setHover(entry: Pickable | null): void {
@@ -400,25 +345,38 @@ export class ObjectInteraction {
       this.setMeshHighlight(this.hovered.mesh, false);
     }
     this.hovered = entry;
-    if (entry && entry !== this.drag?.entry) {
+    if (entry && entry !== this.grab?.entry) {
       this.setMeshHighlight(entry.mesh, true);
     }
   }
 
   private setMeshHighlight(mesh: THREE.Mesh, on: boolean): void {
-    const mat = mesh.material;
-    const materials = Array.isArray(mat) ? mat : [mat];
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     for (const m of materials) {
       if (m instanceof THREE.MeshStandardMaterial) {
-        m.emissive.setHex(on ? 0x334466 : 0x000000);
-        m.emissiveIntensity = on ? 0.35 : 0;
+        m.emissive.setHex(on ? 0x223355 : 0x000000);
+        m.emissiveIntensity = on ? 0.25 : 0;
       }
     }
   }
 
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
-    const amount = -e.deltaY * SCROLL_SENS;
-    this.moveAlongView(amount);
+    this.updateBasis();
+
+    const scrollDelta = -e.deltaY * 0.003 * SCROLL_IMPULSE;
+
+    if (this.grab && this.lmbDown) {
+      this.grab.holdDistance = THREE.MathUtils.clamp(
+        this.grab.holdDistance + e.deltaY * 0.015,
+        GRAB_DIST_MIN,
+        GRAB_DIST_MAX,
+      );
+      return;
+    }
+
+    const impulse = this.forward.clone().multiplyScalar(scrollDelta * 60);
+    this.moveVel.add(impulse);
+    this.applyCamera();
   };
 }

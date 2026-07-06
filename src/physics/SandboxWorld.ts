@@ -291,6 +291,8 @@ export class SandboxWorld {
     const dt = Math.min(0.05, (now - this.lastTickTime) / 1000);
     this.lastTickTime = now;
 
+    this.interaction?.update(dt);
+
     if (!this.world || this.paused) {
       this.renderer.render(this.scene, this.camera);
       return;
