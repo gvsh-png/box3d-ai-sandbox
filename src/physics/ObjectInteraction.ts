@@ -86,7 +86,7 @@ export class ObjectInteraction {
   dispose(): void {
     this.disposed = true;
     this.releaseDrag();
-    this.setHover(null);
+    this.hovered = null;
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
     this.canvas.removeEventListener('pointermove', this.onPointerMove);
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
@@ -348,23 +348,7 @@ export class ObjectInteraction {
   }
 
   private setHover(entry: Pickable | null): void {
-    if (this.hovered && this.hovered !== entry) {
-      this.setHighlight(this.hovered.mesh, false);
-    }
     this.hovered = entry;
-    if (entry && entry !== this.drag?.entry) {
-      this.setHighlight(entry.mesh, true);
-    }
-  }
-
-  private setHighlight(mesh: THREE.Mesh, on: boolean): void {
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (const m of mats) {
-      if (m instanceof THREE.MeshStandardMaterial) {
-        m.emissive.setHex(on ? 0x224466 : 0x000000);
-        m.emissiveIntensity = on ? 0.3 : 0;
-      }
-    }
   }
 
   private onWheel = (e: WheelEvent): void => {

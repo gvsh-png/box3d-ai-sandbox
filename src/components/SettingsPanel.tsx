@@ -5,13 +5,15 @@ import './SettingsPanel.css';
 type Props = {
   apiKey: string;
   model: ModelId;
-  onSave: (apiKey: string, model: ModelId) => void;
+  autoRecordVideo: boolean;
+  onSave: (apiKey: string, model: ModelId, autoRecordVideo: boolean) => void;
   onClose: () => void;
 };
 
-export function SettingsPanel({ apiKey, model, onSave, onClose }: Props) {
+export function SettingsPanel({ apiKey, model, autoRecordVideo, onSave, onClose }: Props) {
   const [key, setKey] = useState(apiKey);
   const [selectedModel, setSelectedModel] = useState(model);
+  const [autoRecord, setAutoRecord] = useState(autoRecordVideo);
 
   return (
     <div className="settings-overlay" onClick={onClose}>
@@ -44,11 +46,20 @@ export function SettingsPanel({ apiKey, model, onSave, onClose }: Props) {
           </select>
         </label>
 
+        <label className="field checkbox-field">
+          <input
+            type="checkbox"
+            checked={autoRecord}
+            onChange={(e) => setAutoRecord(e.target.checked)}
+          />
+          <span>Auto-record video after each prompt (click Finish Video when done)</span>
+        </label>
+
         <div className="settings-actions">
           <button type="button" className="btn secondary" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="btn primary" onClick={() => onSave(key.trim(), selectedModel)}>
+          <button type="button" className="btn primary" onClick={() => onSave(key.trim(), selectedModel, autoRecord)}>
             Save
           </button>
         </div>

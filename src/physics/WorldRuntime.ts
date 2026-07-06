@@ -97,7 +97,7 @@ export class WorldRuntime {
     material: THREE.Material,
     opts: PhysicsOpts & { position?: Vec3; rotation?: Vec3 } = {},
   ): BodyHandle {
-    const mesh = new THREE.Mesh(geometry, material);
+    const mesh = new THREE.Mesh(geometry, material.clone());
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     if (opts.position) mesh.position.set(opts.position.x, opts.position.y, opts.position.z);

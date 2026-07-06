@@ -14,6 +14,7 @@ import {
   type ModelId,
 } from './lib/openrouter';
 import { normalizeBatch } from './lib/normalize';
+import { getAutoRecordVideo, setAutoRecordVideo } from './lib/recordingPrefs';
 import { ChatBar } from './components/ChatBar';
 import { SettingsPanel } from './components/SettingsPanel';
 import { StudioToolbar } from './components/StudioToolbar';
@@ -36,6 +37,7 @@ export default function App() {
   const [history, setHistory] = useState<ConversationTurn[]>([]);
   const [recordingReplay, setRecordingReplay] = useState(false);
   const [recordingVideo, setRecordingVideo] = useState(false);
+  const [autoRecordVideo, setAutoRecordVideoState] = useState(getAutoRecordVideo);
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       role: 'assistant',
@@ -88,11 +90,20 @@ export default function App() {
     panel.scrollTo({ top: panel.scrollHeight, behavior: 'smooth' });
   }, [logs, loading]);
 
+  const startAutoVideo = () => {
+    const world = worldRef.current;
+    if (!world || world.video.isRecording) return;
+    world.startVideoRecording();
+    setRecordingVideo(true);
+    pushStatus('Auto-recording video… click Finish Video when done.');
+  };
+
   const handleSubmit = async (prompt: string) => {
     if (!prompt.trim() || !worldRef.current?.isReady()) return;
 
     setLogs((prev) => [...prev, { role: 'user', text: prompt }]);
     setLoading(true);
+    let succeeded = false;
 
     try {
       const local = tryLocalParse(prompt);
@@ -105,6 +116,7 @@ export default function App() {
           return appendTurn(next, { role: 'assistant', content: msg });
         });
         setLogs((prev) => [...prev, { role: 'assistant', text: msg }]);
+        succeeded = true;
       } else if (apiKey.trim()) {
         const sceneSummary = worldRef.current.getSceneSummary();
         const { message, script } = await generateScriptWithAI(
@@ -125,6 +137,7 @@ export default function App() {
           return appendTurn(next, { role: 'assistant', content: message, script });
         });
         setLogs((prev) => [...prev, { role: 'assistant', text: message }]);
+        succeeded = true;
       } else {
         throw new Error('No API key set. Open settings (+) and add your OpenRouter key, or try "4 boxes from sky" / "clear".');
       }
@@ -133,14 +146,19 @@ export default function App() {
       setLogs((prev) => [...prev, { role: 'error', text }]);
     } finally {
       setLoading(false);
+      if (succeeded && autoRecordVideo) {
+        startAutoVideo();
+      }
     }
   };
 
-  const saveSettings = (key: string, selectedModel: ModelId) => {
+  const saveSettings = (key: string, selectedModel: ModelId, autoRecord: boolean) => {
     setApiKey(key);
     setModel(selectedModel);
+    setAutoRecordVideoState(autoRecord);
     setStoredApiKey(key);
     setStoredModel(selectedModel);
+    setAutoRecordVideo(autoRecord);
     setShowSettings(false);
     setLogs((prev) => [
       ...prev,
@@ -178,8 +196,13 @@ export default function App() {
         ready={ready}
         recordingReplay={recordingReplay}
         recordingVideo={recordingVideo}
+        autoRecordVideo={autoRecordVideo}
         onReplayRecordingChange={setRecordingReplay}
         onVideoRecordingChange={setRecordingVideo}
+        onAutoRecordChange={(on) => {
+          setAutoRecordVideoState(on);
+          setAutoRecordVideo(on);
+        }}
         onStatus={pushStatus}
       />
 
@@ -195,6 +218,7 @@ export default function App() {
         <SettingsPanel
           apiKey={apiKey}
           model={model}
+          autoRecordVideo={autoRecordVideo}
           onSave={saveSettings}
           onClose={() => setShowSettings(false)}
         />

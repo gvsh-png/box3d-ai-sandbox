@@ -55,6 +55,19 @@
   border-color: #5a8fd4;
 }
 
+.checkbox-field {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.checkbox-field input {
+  width: auto;
+  margin-top: 2px;
+  accent-color: #5a8fd4;
+}
+
 .settings-actions {
   display: flex;
   justify-content: flex-end;

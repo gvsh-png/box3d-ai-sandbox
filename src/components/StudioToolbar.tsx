@@ -7,8 +7,10 @@ type Props = {
   ready: boolean;
   recordingReplay: boolean;
   recordingVideo: boolean;
+  autoRecordVideo: boolean;
   onReplayRecordingChange: (on: boolean) => void;
   onVideoRecordingChange: (on: boolean) => void;
+  onAutoRecordChange: (on: boolean) => void;
   onStatus: (msg: string) => void;
 };
 
@@ -17,11 +19,25 @@ export function StudioToolbar({
   ready,
   recordingReplay,
   recordingVideo,
+  autoRecordVideo,
   onReplayRecordingChange,
   onVideoRecordingChange,
+  onAutoRecordChange,
   onStatus,
 }: Props) {
   if (!ready || !world) return null;
+
+  const finishVideo = async () => {
+    if (!recordingVideo) return;
+    const blob = await world.stopVideoRecording();
+    onVideoRecordingChange(false);
+    if (blob) {
+      VideoRecorder.download(blob);
+      onStatus(`Video saved (${(blob.size / 1024 / 1024).toFixed(1)} MB)`);
+    } else {
+      onStatus('Video recording failed');
+    }
+  };
 
   const toggleReplay = () => {
     if (recordingReplay) {
@@ -37,21 +53,11 @@ export function StudioToolbar({
     }
   };
 
-  const toggleVideo = async () => {
-    if (recordingVideo) {
-      const blob = await world.stopVideoRecording();
-      onVideoRecordingChange(false);
-      if (blob) {
-        VideoRecorder.download(blob);
-        onStatus(`Video saved (${(blob.size / 1024 / 1024).toFixed(1)} MB)`);
-      } else {
-        onStatus('Video recording failed');
-      }
-    } else {
-      world.startVideoRecording();
-      onVideoRecordingChange(true);
-      onStatus('Recording video…');
-    }
+  const startManualVideo = () => {
+    if (recordingVideo) return;
+    world.startVideoRecording();
+    onVideoRecordingChange(true);
+    onStatus('Recording video… click Finish Video when done.');
   };
 
   const playReplay = () => {
@@ -96,11 +102,25 @@ export function StudioToolbar({
 
   return (
     <div className="studio-toolbar">
+      {recordingVideo ? (
+        <button type="button" className="finish-video active" onClick={() => void finishVideo()} title="Stop and download video">
+          ✓ Finish Video
+        </button>
+      ) : (
+        <button type="button" onClick={startManualVideo} title="Record WebM video">
+          🎬 Video
+        </button>
+      )}
+      <button
+        type="button"
+        className={autoRecordVideo ? 'toggle on' : 'toggle'}
+        onClick={() => onAutoRecordChange(!autoRecordVideo)}
+        title="Auto-start video recording after each prompt"
+      >
+        Auto {autoRecordVideo ? 'ON' : 'off'}
+      </button>
       <button type="button" className={recordingReplay ? 'active' : ''} onClick={toggleReplay} title="Record replay JSON">
         {recordingReplay ? '⏹ Replay' : '⏺ Replay'}
-      </button>
-      <button type="button" className={recordingVideo ? 'active' : ''} onClick={() => void toggleVideo()} title="Record WebM video">
-        {recordingVideo ? '⏹ Video' : '🎬 Video'}
       </button>
       <button type="button" onClick={playReplay} title="Load and play replay">
         ▶ Play

@@ -158,7 +158,18 @@ export class SandboxWorld {
   }
 
   startVideoRecording(): void {
-    this.video.start(this.renderer.domElement);
+    if (this.video.isRecording) return;
+    const savedRatio = this.renderer.getPixelRatio();
+    this.video.start(this.renderer.domElement, {
+      fps: 24,
+      bitrate: 4_000_000,
+      onRecordingStart: () => {
+        this.renderer.setPixelRatio(Math.min(savedRatio, 1));
+      },
+      onRecordingStop: () => {
+        this.renderer.setPixelRatio(savedRatio);
+      },
+    });
   }
 
   async stopVideoRecording(): Promise<Blob | null> {
