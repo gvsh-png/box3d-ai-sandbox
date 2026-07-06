@@ -6,6 +6,7 @@ export default defineConfig({
   resolve: {
     alias: {
       'mp4-muxer-local': '/src/vendor/mp4-muxer.mjs',
+      'webm-muxer-local': '/src/vendor/webm-muxer.mjs',
     },
   },
   optimizeDeps: {

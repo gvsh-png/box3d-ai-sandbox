@@ -39,7 +39,7 @@ export function StudioToolbar({
   const finishVideo = async () => {
     if (!recordingVideo || !world) return;
     onExportStateChange({ exporting: true, progress: 0 });
-    onStatus('Rendering 60fps MP4 offline — sim had zero encode lag during capture.');
+    onStatus('Rendering offline at 60fps — use Chrome/Edge for MP4.');
     try {
       const result = await world.stopVideoRecording(videoQuality, (p) => {
         onExportStateChange({ exporting: true, progress: p.progress });
@@ -47,7 +47,9 @@ export function StudioToolbar({
       onVideoRecordingChange(false);
       if (result) {
         downloadVideo(result.blob, result.filename);
-        onStatus(`Video saved: ${result.filename} (${(result.blob.size / 1024 / 1024).toFixed(1)} MB, 60fps)`);
+        const mb = (result.blob.size / 1024 / 1024).toFixed(1);
+        const formatLabel = result.format === 'mp4' ? 'MP4' : 'WebM (use Chrome for MP4)';
+        onStatus(`Video saved: ${result.filename} (${mb} MB, 60fps ${formatLabel})`);
       } else {
         onStatus('Video export failed');
       }

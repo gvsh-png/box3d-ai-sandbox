@@ -17,7 +17,8 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
     "paths": {
-      "mp4-muxer-local": ["./src/vendor/mp4-muxer.mjs"]
+      "mp4-muxer-local": ["./src/vendor/mp4-muxer.mjs"],
+      "webm-muxer-local": ["./src/vendor/webm-muxer.mjs"]
     }
   },
   "include": ["src"]
