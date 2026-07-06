@@ -30,7 +30,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       role: 'assistant',
-      text: 'WASD to move, Space up, Shift down, RMB look, LMB drag objects, scroll to fly forward.',
+      text: 'Ask for ANYTHING — AI writes full JavaScript with THREE.js + physics. WASD move, RMB look, LMB drag.',
     },
   ]);
 

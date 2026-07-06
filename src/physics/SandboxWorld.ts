@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ObjectInteraction } from './ObjectInteraction';
+import { colliderFromGeometry } from './colliderUtils';
+import type { PhysicsOpts } from './WorldRuntime';
 import type {
   AddJointCommand,
   ApplyForceCommand,
@@ -55,6 +57,9 @@ export class SandboxWorld {
   private nextId = 0;
   private ready = false;
   private interaction: ObjectInteraction | null = null;
+  private scriptExtras: THREE.Object3D[] = [];
+  private scriptTick: ((dt: number) => void) | null = null;
+  private lastTickTime = performance.now();
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -101,7 +106,96 @@ export class SandboxWorld {
     const dynamic = this.bodies.filter((b) => b.body.isDynamic()).length;
     const gravity = this.world?.gravity ?? { x: 0, y: -10, z: 0 };
     const ids = [...this.bodyById.keys()].slice(0, 12).join(', ');
-    return `${this.bodies.length} bodies (${dynamic} dynamic), gravity (${gravity.x}, ${gravity.y}, ${gravity.z}), ids: [${ids}]`;
+    return `${this.bodies.length} bodies (${dynamic} dynamic), gravity (${gravity.x}, ${gravity.y}, ${gravity.z}), ids: [${ids}], scriptTick: ${!!this.scriptTick}`;
+  }
+
+  /** Called by WorldRuntime — clears spawned bodies, keeps ground. */
+  clearSpawned(): void {
+    this.clearScriptState();
+    for (const entry of [...this.bodies]) {
+      this.removeEntry(entry);
+    }
+    this.bodies = [];
+    this.bodyById.clear();
+    this.motors.clear();
+    this.joints = [];
+  }
+
+  clearScriptState(): void {
+    this.scriptTick = null;
+    for (const obj of this.scriptExtras) {
+      this.scene.remove(obj);
+      obj.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          const m = child.material;
+          if (Array.isArray(m)) m.forEach((mat) => mat.dispose());
+          else m.dispose();
+        }
+      });
+    }
+    this.scriptExtras = [];
+  }
+
+  addScriptExtra(obj: THREE.Object3D): void {
+    this.scriptExtras.push(obj);
+  }
+
+  setScriptTick(fn: ((dt: number) => void) | null): void {
+    this.scriptTick = fn;
+  }
+
+  registerPhysicsMesh(mesh: THREE.Mesh, opts: PhysicsOpts = {}): string {
+    if (!this.world) return '';
+
+    if (!mesh.parent) this.scene.add(mesh);
+
+    const id = opts.id ?? `body-${this.nextId++}`;
+    mesh.userData.sandboxId = id;
+
+    const { x, y, z } = mesh.position;
+    const q = mesh.quaternion;
+
+    const colliderDesc = colliderFromGeometry(mesh.geometry);
+    colliderDesc.setDensity(opts.static ? 0 : (opts.density ?? 1));
+    colliderDesc.setFriction(opts.friction ?? 0.4);
+    colliderDesc.setRestitution(opts.restitution ?? 0.2);
+    if (opts.sensor) colliderDesc.setSensor(true);
+
+    const bodyDesc = opts.static
+      ? RAPIER.RigidBodyDesc.fixed()
+      : RAPIER.RigidBodyDesc.dynamic();
+    bodyDesc.setTranslation(x, y, z);
+    bodyDesc.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w });
+
+    const body = this.world.createRigidBody(bodyDesc);
+    const collider = this.world.createCollider(colliderDesc, body);
+
+    if (opts.velocity) {
+      body.setLinvel(opts.velocity, true);
+    }
+
+    this.registerEntry({ mesh, body, collider, id });
+    return id;
+  }
+
+  setBodyPosition(id: string, x: number, y: number, z: number): void {
+    const entry = this.bodyById.get(id);
+    if (!entry) return;
+    entry.body.setTranslation({ x, y, z }, true);
+    entry.mesh.position.set(x, y, z);
+  }
+
+  setBodyVelocity(id: string, x: number, y: number, z: number): void {
+    const entry = this.bodyById.get(id);
+    if (!entry) return;
+    entry.body.setLinvel({ x, y, z }, true);
+  }
+
+  applyBodyImpulse(id: string, x: number, y: number, z: number): void {
+    const entry = this.bodyById.get(id);
+    if (!entry) return;
+    entry.body.applyImpulse({ x, y, z }, true);
   }
 
   executeBatch(batch: CommandBatch): string {
@@ -193,9 +287,22 @@ export class SandboxWorld {
 
   private tick = (): void => {
     this.animationId = requestAnimationFrame(this.tick);
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - this.lastTickTime) / 1000);
+    this.lastTickTime = now;
+
     if (!this.world || this.paused) {
       this.renderer.render(this.scene, this.camera);
       return;
+    }
+
+    if (this.scriptTick) {
+      try {
+        this.scriptTick(dt);
+      } catch (err) {
+        console.error('Script tick error:', err);
+        this.scriptTick = null;
+      }
     }
 
     for (const [id, motor] of this.motors) {
@@ -539,16 +646,6 @@ export class SandboxWorld {
         entry.body.applyImpulse({ x: dx * force, y: dy * force + 2, z: dz * force }, true);
       }
     }
-  }
-
-  private clearSpawned(): void {
-    for (const entry of [...this.bodies]) {
-      this.removeEntry(entry);
-    }
-    this.bodies = [];
-    this.bodyById.clear();
-    this.motors.clear();
-    this.joints = [];
   }
 
   private clearAll(): void {

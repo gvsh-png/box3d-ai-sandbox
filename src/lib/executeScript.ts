@@ -1,8 +1,10 @@
 import { SandboxAPI } from '../physics/SandboxAPI';
+import { WorldRuntime } from '../physics/WorldRuntime';
 import type { SandboxWorld } from '../physics/SandboxWorld';
+import * as THREE from 'three';
 
 const BLOCKED =
-  /\b(import|export|require|fetch|XMLHttpRequest|window|document|localStorage|sessionStorage|eval|Function|globalThis|process|__proto__|constructor\s*\[)\b/i;
+  /\b(import|export|require|fetch|XMLHttpRequest|window|document|localStorage|sessionStorage|eval|globalThis|process|__proto__|constructor\s*\[)\b/i;
 
 export type ScriptResult = {
   ok: boolean;
@@ -24,16 +26,24 @@ export function executeSandboxScript(world: SandboxWorld, script: string): Scrip
     return { ok: false, message: 'Blocked unsafe code', error: 'Script uses forbidden APIs' };
   }
 
+  const runtime = new WorldRuntime(world);
   const sandbox = new SandboxAPI(world);
 
   try {
     const run = new Function(
+      'world',
+      'THREE',
       'sandbox',
       'Math',
       `"use strict";\n${cleaned}`,
-    ) as (sandbox: SandboxAPI, math: typeof Math) => void;
+    ) as (
+      world: WorldRuntime,
+      three: typeof THREE,
+      sandbox: SandboxAPI,
+      math: typeof Math,
+    ) => void;
 
-    run(sandbox, Math);
+    run(runtime, THREE, sandbox, Math);
     return { ok: true, message: 'Script executed.' };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
