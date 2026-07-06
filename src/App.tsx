@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { SandboxWorld } from './physics/SandboxWorld';
+import { executeSandboxScript } from './lib/executeScript';
 import {
   getStoredApiKey,
   getStoredModel,
+  generateScriptWithAI,
   MODELS,
-  parsePromptWithAI,
   setStoredApiKey,
   setStoredModel,
   tryLocalParse,
@@ -29,7 +30,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       role: 'assistant',
-      text: 'Box3D AI Sandbox ready. Add your OpenRouter key (+) for full AI — try "spawn a purple circle" or the architecture test prompts.',
+      text: 'Box3D AI Sandbox — AI writes JavaScript to build anything. Add your OpenRouter key (+) and try "spawn a purple circle" or a full destruction scene.',
     },
   ]);
 
@@ -61,19 +62,24 @@ export default function App() {
 
     try {
       const local = tryLocalParse(prompt);
-      let batch;
 
       if (local) {
-        batch = normalizeBatch(local, prompt);
+        const batch = normalizeBatch(local, prompt);
+        const msg = worldRef.current.executeBatch(batch);
+        setLogs((prev) => [...prev, { role: 'assistant', text: msg }]);
       } else if (apiKey.trim()) {
         const sceneSummary = worldRef.current.getSceneSummary();
-        batch = await parsePromptWithAI(apiKey.trim(), model, prompt, sceneSummary);
+        const { message, script } = await generateScriptWithAI(apiKey.trim(), model, prompt, sceneSummary);
+        const result = executeSandboxScript(worldRef.current, script);
+
+        if (!result.ok) {
+          throw new Error(`${result.error}\n\nGenerated script:\n${script.slice(0, 400)}${script.length > 400 ? '…' : ''}`);
+        }
+
+        setLogs((prev) => [...prev, { role: 'assistant', text: message }]);
       } else {
         throw new Error('No API key set. Open settings (+) and add your OpenRouter key, or try "4 boxes from sky" / "clear".');
       }
-
-      const msg = worldRef.current.executeBatch(batch);
-      setLogs((prev) => [...prev, { role: 'assistant', text: msg }]);
     } catch (err) {
       const text = err instanceof Error ? err.message : 'Something went wrong';
       setLogs((prev) => [...prev, { role: 'error', text }]);
@@ -92,7 +98,9 @@ export default function App() {
       ...prev,
       {
         role: 'assistant',
-        text: key ? `OpenRouter connected. Using ${MODELS.find((m) => m.id === selectedModel)?.label ?? selectedModel}.` : 'API key cleared. Local parser only.',
+        text: key
+          ? `OpenRouter connected. AI will generate sandbox scripts using ${MODELS.find((m) => m.id === selectedModel)?.label ?? selectedModel}.`
+          : 'API key cleared. Local fast-path only.',
       },
     ]);
   };
@@ -107,7 +115,7 @@ export default function App() {
         <div className="status">
           {!ready && <span className="badge">Loading physics…</span>}
           {ready && <span className="badge ok">Sim running</span>}
-          {apiKey ? <span className="badge ok">OpenRouter</span> : <span className="badge">Local mode</span>}
+          {apiKey ? <span className="badge ok">Script mode</span> : <span className="badge">Local mode</span>}
         </div>
       </header>
 

@@ -41,7 +41,19 @@ Open http://localhost:5173
 
 ---
 
-## Architecture plan
+## How it works
+
+**Script mode** — the AI writes JavaScript that runs in the sandbox:
+
+```
+You: "50 block jenga tower + wrecking ball"
+  ↓ OpenRouter (DeepSeek)
+AI: { "message": "...", "script": "sandbox.clear(); for(...)" }
+  ↓ execute in browser (sandbox API only, no fetch/window)
+Physics scene updates
+```
+
+The AI can use **loops, variables, and logic** — not limited to a fixed command list.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

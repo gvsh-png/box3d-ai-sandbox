@@ -19,7 +19,7 @@ export function SettingsPanel({ apiKey, model, onSave, onClose }: Props) {
         <h2>Sandbox Settings</h2>
         <p className="settings-hint">
           Paste your <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">OpenRouter API key</a>.
-          Stored locally in your browser only. Use DeepSeek V4 Flash with <code>:floor</code> for lowest cost.
+          The AI generates JavaScript that runs in the sandbox — loops, logic, any scene you describe.
         </p>
 
         <label className="field">

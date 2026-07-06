@@ -1,5 +1,5 @@
-import { COMMAND_SCHEMA, type CommandBatch } from '../types/commands';
-import { normalizeBatch } from './normalize';
+import { SANDBOX_API_DOCS, type ScriptResponse } from '../types/script';
+import type { CommandBatch } from '../types/commands';
 
 export const MODELS = [
   { id: 'deepseek/deepseek-v4-flash:nitro', label: 'DeepSeek V4 Flash (fastest)' },
@@ -34,30 +34,49 @@ export function setStoredModel(model: ModelId): void {
 
 export type ChatMessage = { role: 'user' | 'assistant' | 'system'; content: string };
 
-export async function parsePromptWithAI(
+/** Ask the AI to generate executable sandbox JavaScript. */
+export async function generateScriptWithAI(
   apiKey: string,
   model: ModelId,
   userPrompt: string,
   sceneSummary: string,
-): Promise<CommandBatch> {
+): Promise<ScriptResponse> {
   const messages: ChatMessage[] = [
-    { role: 'system', content: COMMAND_SCHEMA },
+    { role: 'system', content: SANDBOX_API_DOCS },
     {
       role: 'user',
-      content: `Scene: ${sceneSummary}\n\nRequest: ${userPrompt}`,
+      content: `Current scene: ${sceneSummary}\n\nUser request: ${userPrompt}`,
     },
   ];
 
   const body = {
     model,
     messages,
-    temperature: 0.15,
-    max_tokens: 2048,
+    temperature: 0.2,
+    max_tokens: 4096,
     response_format: { type: 'json_object' as const },
     provider: { sort: 'latency' as const },
   };
 
-  let res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  let res = await openRouterFetch(apiKey, body);
+  let data = await res.json();
+  let content = extractContent(data);
+
+  if (!content) {
+    const { response_format: _, ...noJson } = body;
+    res = await openRouterFetch(apiKey, noJson);
+    if (!res.ok) throw new Error(`OpenRouter retry failed: ${await res.text()}`);
+    data = await res.json();
+    content = extractContent(data);
+  }
+
+  if (!content) throw new Error('Empty response from model — try rephrasing or a different model.');
+
+  return parseScriptResponse(content);
+}
+
+function openRouterFetch(apiKey: string, body: object): Promise<Response> {
+  return fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -66,36 +85,10 @@ export async function parsePromptWithAI(
       'X-Title': 'Box3D AI Sandbox',
     },
     body: JSON.stringify(body),
+  }).then(async (res) => {
+    if (!res.ok) throw new Error(`OpenRouter error ${res.status}: ${await res.text()}`);
+    return res;
   });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenRouter error ${res.status}: ${err}`);
-  }
-
-  let data = await res.json();
-  let content = extractContent(data);
-
-  if (!content) {
-    const { response_format: _, ...noJson } = body;
-    res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'https://box3d-ai-sandbox',
-        'X-Title': 'Box3D AI Sandbox',
-      },
-      body: JSON.stringify(noJson),
-    });
-    if (!res.ok) throw new Error(`OpenRouter retry failed: ${await res.text()}`);
-    data = await res.json();
-    content = extractContent(data);
-  }
-
-  if (!content) throw new Error('Empty response from model — try rephrasing or a different model.');
-
-  return normalizeBatch(parseCommandJson(content), userPrompt);
 }
 
 function extractContent(data: {
@@ -105,27 +98,44 @@ function extractContent(data: {
   if (!msg) return undefined;
   if (msg.content?.trim()) return msg.content;
   if (msg.reasoning?.trim()) {
-    const match = msg.reasoning.match(/\{[\s\S]*"commands"[\s\S]*\}/);
+    const match = msg.reasoning.match(/\{[\s\S]*"script"[\s\S]*\}/);
     if (match) return match[0];
   }
   return undefined;
 }
 
-export function parseCommandJson(raw: string): CommandBatch {
+export function parseScriptResponse(raw: string): ScriptResponse {
   const cleaned = raw.replace(/```json\n?|\n?```/g, '').trim();
   const start = cleaned.indexOf('{');
   const end = cleaned.lastIndexOf('}');
   const jsonStr = start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned;
-  const parsed = JSON.parse(jsonStr) as CommandBatch;
-  if (!Array.isArray(parsed.commands)) {
-    throw new Error('Invalid command batch: missing commands array');
+  const parsed = JSON.parse(jsonStr) as ScriptResponse & { commands?: unknown };
+
+  if (typeof parsed.script === 'string' && parsed.script.trim()) {
+    return {
+      message: parsed.message ?? 'Script ready.',
+      script: parsed.script,
+    };
   }
-  return parsed;
+
+  // Legacy JSON commands — convert to a script
+  if (Array.isArray(parsed.commands)) {
+    return {
+      message: parsed.message ?? 'Converted commands to script.',
+      script: commandsToScript(parsed as CommandBatch),
+    };
+  }
+
+  throw new Error('Invalid response: missing script field');
+}
+
+function commandsToScript(batch: CommandBatch): string {
+  const lines = batch.commands.map((c) => `sandbox.executeCommand(${JSON.stringify(c)});`);
+  return lines.join('\n');
 }
 
 /**
- * Strict fast-path only — avoids stealing prompts from the AI.
- * Matches: "4 boxes from sky", "clear", "moon gravity", etc.
+ * Strict fast-path only — instant without API.
  */
 export function tryLocalParse(prompt: string): CommandBatch | null {
   const lower = prompt.toLowerCase().trim();
@@ -185,5 +195,6 @@ export function tryLocalParse(prompt: string): CommandBatch | null {
   return null;
 }
 
-/** @deprecated use tryLocalParse */
+/** @deprecated */
+export const parsePromptWithAI = generateScriptWithAI;
 export const localParse = tryLocalParse;
