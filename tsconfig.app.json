@@ -15,7 +15,10 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUncheckedSideEffectImports": true,
+    "paths": {
+      "mp4-muxer-local": ["./src/vendor/mp4-muxer.mjs"]
+    }
   },
   "include": ["src"]
 }

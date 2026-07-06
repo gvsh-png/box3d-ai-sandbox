@@ -18,7 +18,8 @@ A **natural-language 3D physics playground** inspired by [Box3D](https://github.
 ## Quick start
 
 ```bash
-npm install
+git pull
+npm install   # after updates — installs jsonrepair etc.
 npm run dev
 ```
 

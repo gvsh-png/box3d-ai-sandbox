@@ -1,4 +1,4 @@
-import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
+import { Muxer, ArrayBufferTarget } from 'mp4-muxer-local';
 import type { ReplayData } from '../physics/ReplayRecorder';
 import type { SandboxWorld } from '../physics/SandboxWorld';
 import { interpolateReplayAt } from '../lib/replayUtils';
