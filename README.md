@@ -12,7 +12,7 @@ A **natural-language 3D physics playground** inspired by [Box3D](https://github.
 | **OpenRouter** | Paste your API key in settings; calls run from the browser |
 | **Low-cost models** | Default: `deepseek/deepseek-v4-flash:floor` (~$0.09/M input tokens) |
 | **Free fallback** | Simple phrases work without an API key via local parser |
-| **3D physics** | Three.js rendering + Rapier WASM (Box3D-style command schema) |
+| **3D physics** | Three.js rendering + [Box3D](https://github.com/erincatto/box3d) via [tumble.js](https://github.com/dylanebert/tumble.js) |
 | **Orbit camera** | Drag to rotate, scroll to zoom |
 
 ## Quick start
@@ -82,23 +82,17 @@ The AI can use **loops, variables, and logic** — not limited to a fixed comman
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Physics + Render                                           │
-│  • Rapier3D WASM (browser-ready today)                      │
+│  • Box3D (tumble.js TypeScript port)                        │
 │  • Three.js WebGL scene                                     │
-│  • Future: swap in official Box3D WASM when bindings ship  │
+│  • Future: native Box3D WASM when official bindings ship    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Why Rapier instead of Box3D WASM today?
+### Physics engine
 
-[Box3D](https://github.com/erincatto/box3d) can be built with Emscripten (`emcmake cmake -B build`), but there is **no official npm JS binding yet** (unlike Box2D v3's `box2d-v3-wasm`). Community WASM ports exist ([discussion #36](https://github.com/erincatto/box3d/discussions/36)) but require WebGPU and a custom build.
+This sandbox uses **[tumble.js](https://github.com/dylanebert/tumble.js)** — a faithful TypeScript port of Erin Catto's **[Box3D](https://github.com/erincatto/box3d)**. Same solver concepts (`World.step`, revolute/weld joints, convex hulls, ray casts) without a custom Emscripten build.
 
-This sandbox uses a **Box3D-inspired command schema** (`b3World`-style spawn/gravity/step concepts from the [hello guide](https://github.com/erincatto/box3d/blob/main/docs/hello.md)) so you can swap the physics backend when official Box3D WASM bindings land.
-
-### Roadmap to native Box3D
-
-1. **Phase 1 (this repo)** — Chat UI + OpenRouter + command executor + Rapier/Three.js
-2. **Phase 2** — Compile Box3D to WASM via Emscripten; expose `b3CreateWorld`, `b3CreateBody`, `b3World_Step` to JS
-3. **Phase 3** — Replay recording, joints (revolute, prismatic), shape casts, multithreaded workers
+When official Box3D npm/WASM bindings ship, we can swap the backend while keeping the same command schema.
 
 ---
 
@@ -148,7 +142,7 @@ Supported actions: `spawn`, `spawnGround`, `setGravity`, `explode`, `clear`, `pa
 src/
   components/     ChatBar, SettingsPanel (Cursor-style UI)
   lib/            OpenRouter client + local fallback parser
-  physics/        SandboxWorld (Three.js + Rapier)
+  physics/        SandboxWorld (Three.js + Box3D/tumble.js)
   types/          Command schema types
 ```
 

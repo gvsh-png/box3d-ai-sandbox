@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import RAPIER from '@dimforge/rapier3d-compat';
-import type RAPIER_NS from '@dimforge/rapier3d-compat';
+import { BodyType, type Body } from 'tumble.js';
+import { bodyPosition, setBodyPose } from './box3dUtils';
 
 type Pickable = {
   mesh: THREE.Mesh;
-  body: RAPIER_NS.RigidBody;
+  body: Body;
   id: string;
 };
 
@@ -15,7 +15,7 @@ type DragState = {
   lastPos: THREE.Vector3;
   lastTime: number;
   velocity: THREE.Vector3;
-  savedType: RAPIER_NS.RigidBodyType;
+  savedType: BodyType;
   minCenterY: number;
 };
 
@@ -167,7 +167,6 @@ export class ObjectInteraction {
       const delta = this.moveVel.clone().multiplyScalar(dt);
       this.camPos.add(delta);
 
-      // Move dragged object with camera when flying
       if (this.drag && this.lmbDown) {
         const pos = this.drag.lastPos.clone().add(delta);
         this.setDragPosition(pos);
@@ -196,7 +195,7 @@ export class ObjectInteraction {
       (pos.z - this.drag.lastPos.z) / dt,
     );
 
-    this.drag.entry.body.setNextKinematicTranslation({ x: pos.x, y: pos.y, z: pos.z });
+    setBodyPose(this.drag.entry.body, pos.x, pos.y, pos.z);
     this.drag.entry.mesh.position.copy(pos);
     this.drag.lastPos.copy(pos);
     this.drag.lastTime = now;
@@ -240,13 +239,13 @@ export class ObjectInteraction {
     this.setPointer(e);
 
     const hit = this.pickAt(this.pointer);
-    if (!hit?.body.isDynamic()) {
+    if (!hit || hit.body.getType() !== BodyType.Dynamic) {
       this.capture(e);
       return;
     }
 
     const hitPoint = new THREE.Vector3();
-    const bodyPos = hit.body.translation();
+    const bodyPos = bodyPosition(hit.body);
     const grabPoint = new THREE.Vector3(bodyPos.x, bodyPos.y, bodyPos.z);
 
     const normal = new THREE.Vector3();
@@ -258,10 +257,10 @@ export class ObjectInteraction {
     this.capture(e);
     this.canvas.style.cursor = 'grabbing';
 
-    const savedType = hit.body.bodyType();
-    hit.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
-    hit.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-    hit.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    const savedType = hit.body.getType();
+    hit.body.setType(BodyType.Kinematic);
+    hit.body.setLinearVelocity({ x: 0, y: 0, z: 0 });
+    hit.body.setAngularVelocity({ x: 0, y: 0, z: 0 });
 
     this.drag = {
       entry: hit,
@@ -291,7 +290,6 @@ export class ObjectInteraction {
       this.applyCamera();
     }
 
-    // Cursor drag — LMB held, pause while RMB look is active
     if (this.drag && this.lmbDown && !this.rmbDown) {
       this.setPointer(e);
       const hitPoint = new THREE.Vector3();
@@ -304,7 +302,7 @@ export class ObjectInteraction {
     if (!this.lmbDown && !this.rmbDown) {
       this.setPointer(e);
       const hit = this.pickAt(this.pointer);
-      if (hit?.body.isDynamic()) {
+      if (hit?.body.getType() === BodyType.Dynamic) {
         this.setHover(hit);
         this.canvas.style.cursor = 'grab';
       } else {
@@ -350,14 +348,15 @@ export class ObjectInteraction {
     if (!this.drag) return;
 
     const { entry, velocity, savedType } = this.drag;
-    const t = entry.body.translation();
+    const t = bodyPosition(entry.body);
 
-    entry.body.setBodyType(savedType, true);
-    entry.body.setTranslation({ x: t.x, y: t.y, z: t.z }, true);
-    entry.body.setLinvel(
-      { x: velocity.x * 0.4, y: velocity.y * 0.4, z: velocity.z * 0.4 },
-      true,
-    );
+    entry.body.setType(savedType);
+    setBodyPose(entry.body, t.x, t.y, t.z);
+    entry.body.setLinearVelocity({
+      x: velocity.x * 0.4,
+      y: velocity.y * 0.4,
+      z: velocity.z * 0.4,
+    });
 
     this.drag = null;
     if (!this.lmbDown) this.canvas.style.cursor = this.hovered ? 'grab' : 'default';

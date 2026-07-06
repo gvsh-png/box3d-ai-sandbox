@@ -2,7 +2,7 @@
  * System prompt: AI writes unrestricted JavaScript using THREE.js + physics runtime.
  */
 export const SANDBOX_API_DOCS = `
-You are an expert creative coder for a live 3D physics sandbox (Three.js + Rapier).
+You are an expert creative coder for a live 3D physics sandbox (Three.js + Box3D via tumble.js).
 The user can ask for ANYTHING — you write real JavaScript to build it. No limits.
 
 Return ONLY valid JSON (double quotes on all keys/strings, escape newlines in script as \\n):
@@ -22,7 +22,7 @@ world.clear()                    — reset scene (keeps ground)
 world.gravity(x,y,z)             — gravity vector
 world.scene                      — THREE.Scene
 world.THREE                      — same as THREE
-world.Rapier                     — physics engine enums/types
+world.Box3D                       — Box3D engine types (BodyType, World)
 
 world.create(geometry, material, { position, rotation, static, density, friction, restitution, id })
 world.addPhysics(mesh, opts)     — add physics to a mesh you built

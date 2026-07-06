@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import RAPIER from '@dimforge/rapier3d-compat';
+import { BodyType, World } from 'tumble.js';
 import type { SandboxWorld } from './SandboxWorld';
 import type { AgentDef, AgentThinkFn } from './AgentSystem';
 import type { CameraKeyframe } from './CinematicCamera';
@@ -31,7 +31,7 @@ export type BodyHandle = {
  */
 export class WorldRuntime {
   readonly THREE = THREE;
-  readonly Rapier = RAPIER;
+  readonly Box3D = { BodyType, World };
 
   private bodies = new Map<string, BodyHandle>();
 
